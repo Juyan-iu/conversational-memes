@@ -1,0 +1,1 @@
+This is a taxonomy of Speech Functions adapted for social media discourse analysis. The taxonomy covers three levels of conversational functions, focusing on how utterances initiate, react to, or sustain conversations in online social media contexts including posts and comments.

@@ -1,0 +1,232 @@
+{
+  "question_1": "Do the utterances initiate a conversation or respond to a previous one?",
+  "answer_1": "The taxonomy labels 'Open' and 'React' indicate whether the utterances are initiating a conversation or responding to a previous one respectively.",
+  "question_2": "What type of information is being shared or demanded in the utterances?",
+  "answer_2": "The labels 'Fact' and 'Opinion' in the taxonomy indicate whether factual information or evaluative information is being shared or demanded.",
+  "question_3": "What is the nature of the response in the conversation - supportive, confrontational, or command?",
+  "answer_3": "The labels 'Support', 'Confront', and 'Command' indicate whether the response is supportive, confrontational, or a command.",
+  "question_to_define_groups": "Are the utterances initiating a conversation or responding to a previous one, and what type of information or response is being shared or demanded?",
+  "groups": [
+    {
+      "label": "Utterances that initiate a conversation and share or demand factual or evaluative information.",
+      "data": [
+        "Open.Attend",
+        "Open.Command",
+        "Open.Demand.Fact",
+        "Open.Demand.Opinion",
+        "Open.Give.Fact",
+        "Open.Give.Opinion"
+      ],
+      "next_split": {
+        "question_1": "Do some utterances involve asking for information or opinions?",
+        "answer_1": "Yes, some utterances involve asking for factual information or opinions, such as 'Open.Demand.Fact' and 'Open.Demand.Opinion'.",
+        "question_2": "Do some utterances involve providing information or opinions?",
+        "answer_2": "Yes, some utterances involve providing factual information or opinions, such as 'Open.Give.Fact' and 'Open.Give.Opinion'.",
+        "question_3": "Are there utterances that serve to initiate a dialogue without necessarily asking or giving information?",
+        "answer_3": "Yes, there are utterances that serve to initiate a dialogue without necessarily asking or giving information, such as 'Open.Attend' and 'Open.Command'.",
+        "question_to_define_groups": "Does the utterance involve asking for or providing information or opinions, or does it serve to simply initiate a dialogue?",
+        "groups": [
+          {
+            "label": "The utterance involves asking for information or opinions.",
+            "data": [
+              "Open.Demand.Fact",
+              "Open.Demand.Opinion"
+            ],
+            "next_split": {
+              "question_1": "Does the utterance demand information?",
+              "answer_1": "Yes, both taxonomy labels involve demanding information from the interlocutor.",
+              "question_2": "What type of information is being demanded by the utterance?",
+              "answer_2": "The utterance can demand either factual information or opinion/judgment.",
+              "question_3": "At what point in the conversation is the information being demanded?",
+              "answer_3": "The information is being demanded either at the beginning of a conversation or when introducing a new topic.",
+              "question_to_define_groups": "What type of information is the utterance demanding?",
+              "groups": [
+                {
+                  "label": "The utterance is demanding factual information.",
+                  "data": [
+                    "Open.Demand.Fact"
+                  ]
+                },
+                {
+                  "label": "The utterance is demanding an opinion or judgment.",
+                  "data": [
+                    "Open.Demand.Opinion"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "label": "The utterance involves providing information or opinions.",
+            "data": [
+              "Open.Give.Fact",
+              "Open.Give.Opinion"
+            ],
+            "next_split": {
+              "question_1": "Does the utterance provide factual information?",
+              "answer_1": "If the utterance provides factual information, it likely falls under the 'Open.Give.Fact' label.",
+              "question_2": "Does the utterance provide judgment or evaluative information?",
+              "answer_2": "If the utterance provides judgment or evaluative information, it likely falls under the 'Open.Give.Opinion' label.",
+              "question_3": "Is the utterance at the beginning of a conversation or when introducing a new topic?",
+              "answer_3": "If the utterance is at the beginning of a conversation or when introducing a new topic, it likely falls under either the 'Open.Give.Fact' or 'Open.Give.Opinion' label, depending on the type of information provided.",
+              "question_to_define_groups": "Does the utterance provide factual or evaluative information?",
+              "groups": [
+                {
+                  "label": "The utterance provides factual information.",
+                  "data": [
+                    "Open.Give.Fact"
+                  ]
+                },
+                {
+                  "label": "The utterance provides evaluative information.",
+                  "data": [
+                    "Open.Give.Opinion"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "label": "The utterance serves to initiate a dialogue without necessarily asking or giving information.",
+            "data": [
+              "Open.Attend",
+              "Open.Command"
+            ],
+            "next_split": {
+              "question_1": "Does the utterance serve to initiate a conversation or discussion?",
+              "answer_1": "If the utterance is a greeting or a command/request to start a dialog or discussion, then it serves to initiate a conversation.",
+              "question_2": "Is the utterance a form of greeting?",
+              "answer_2": "If the utterance is a simple salutation like 'Hey!' or 'Hi there!', then it is a form of greeting.",
+              "question_3": "Does the utterance contain a request, invitation, or command?",
+              "answer_3": "If the utterance is a directive for someone to share information or start a discussion, like 'Could you tell me about this?', then it contains a request, invitation, or command.",
+              "question_to_define_groups": "Does the utterance serve to initiate a conversation, and if so, is it through a greeting or a command/request?",
+              "groups": [
+                {
+                  "label": "The utterance is a greeting that initiates a conversation.",
+                  "data": [
+                    "Open.Attend"
+                  ]
+                },
+                {
+                  "label": "The utterance is a command or request that initiates a conversation or discussion.",
+                  "data": [
+                    "Open.Command"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "Utterances that respond to a previous one and share supportive, confrontational responses or commands.",
+      "data": [
+        "React.Rejoinder.Support",
+        "React.Rejoinder.Confront",
+        "React.Respond.Support",
+        "React.Respond.Confront",
+        "React.Respond.Command"
+      ],
+      "next_split": {
+        "question_1": "Do the utterances in the taxonomy express a positive or negative sentiment?",
+        "answer_1": "Yes, the utterances express either a positive or negative sentiment.",
+        "question_2": "Do the utterances in the taxonomy respond to a previous statement or question?",
+        "answer_2": "Yes, all utterances in the taxonomy are responses to previous statements or questions.",
+        "question_3": "Do the utterances in the taxonomy include a command or request?",
+        "answer_3": "Yes, some utterances in the taxonomy include a command or request.",
+        "question_to_define_groups": "Does the utterance express a positive sentiment, a negative sentiment or a command/request?",
+        "groups": [
+          {
+            "label": "The utterance expresses a positive sentiment.",
+            "data": [
+              "React.Rejoinder.Support",
+              "React.Respond.Support"
+            ],
+            "next_split": {
+              "question_1": "Does the utterance respond to a previous statement or question?",
+              "answer_1": "If the utterance is in response to a previous statement or question, it falls under the 'React' category of the taxonomy.",
+              "question_2": "Does the utterance express support or agreement?",
+              "answer_2": "If the utterance expresses support or agreement, it falls under the 'Support' subcategory of the 'React' category.",
+              "question_3": "Does the utterance provide new supportive information or express understanding?",
+              "answer_3": "If the utterance provides new supportive information or expresses understanding, it falls under the 'React.Respond.Support' label. If it is a detailed supportive response or a question that shows engagement, it falls under the 'React.Rejoinder.Support' label.",
+              "question_to_define_groups": "Is the utterance a response to a previous statement or question, and does it express support or agreement?",
+              "groups": [
+                {
+                  "label": "The utterance is a response to a previous statement or question and expresses support or agreement.",
+                  "data": [
+                    "React.Respond.Support",
+                    "React.Rejoinder.Support"
+                  ],
+                  "next_split": {
+                    "question_1": "Does the utterance contain a question or detailed supportive response to the interlocutor's statements?",
+                    "answer_1": "If yes, it might be a 'React.Rejoinder.Support'. If no, it might be a 'React.Respond.Support'.",
+                    "question_2": "Does the utterance express positive emotion or show engagement with the interlocutor's statements?",
+                    "answer_2": "If yes, it might be a 'React.Rejoinder.Support'. If no, it might be a 'React.Respond.Support'.",
+                    "question_3": "Does the utterance provide a positive response to a question, express understanding or agreement, or provide new supportive information, and is the speaker different from the previous one?",
+                    "answer_3": "If yes, it might be a 'React.Respond.Support'. If no, it might be a 'React.Rejoinder.Support'.",
+                    "question_to_define_groups": "Does the utterance contain a question or detailed supportive response, express positive emotion, or show engagement with the interlocutor's statements?",
+                    "groups": [
+                      {
+                        "label": "Yes, the utterance contains a question or detailed supportive response, expresses positive emotion, or shows engagement with the interlocutor's statements.",
+                        "data": [
+                          "React.Rejoinder.Support"
+                        ]
+                      },
+                      {
+                        "label": "No, the utterance does not contain a question or detailed supportive response, does not express positive emotion, and does not show engagement with the interlocutor's statements.",
+                        "data": [
+                          "React.Respond.Support"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "label": "The utterance does not respond to a previous statement or question, or does not express support or agreement.",
+                  "data": []
+                }
+              ]
+            }
+          },
+          {
+            "label": "The utterance expresses a negative sentiment.",
+            "data": [
+              "React.Rejoinder.Confront",
+              "React.Respond.Confront"
+            ],
+            "next_split": {
+              "question_1": "Do the utterances involve a response to a previous statement?",
+              "answer_1": "Yes, both labels involve a response to a previous statement.",
+              "question_2": "Do the utterances express disagreement or challenge the previous statement?",
+              "answer_2": "Yes, both labels involve expressions of disagreement or challenge to the previous statement.",
+              "question_3": "Are the utterances detailed and confrontational or simply negative responses?",
+              "answer_3": "'React.Rejoinder.Confront' utterances are detailed and confrontational while 'React.Respond.Confront' utterances are simply negative responses.",
+              "question_to_define_groups": "Does the utterance provide a detailed confrontational response or simply express disagreement?",
+              "groups": [
+                {
+                  "label": "The utterance provides a detailed confrontational response.",
+                  "data": [
+                    "React.Rejoinder.Confront"
+                  ]
+                },
+                {
+                  "label": "The utterance simply expresses disagreement.",
+                  "data": [
+                    "React.Respond.Confront"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "label": "The utterance includes a command or request.",
+            "data": [
+              "React.Respond.Command"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
