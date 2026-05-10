@@ -1,7 +1,7 @@
 # 01_collection — Meme Reply Collection
 
 > **Prerequisites:** Before running the collection pipeline, train the meme classifier first.
-> See [`02_classifier/`](../02_classifier/README.md) for setup and training instructions.
+> See [`02_classifier/`](../02_meme_classification/README.md) for setup and training instructions.
 
 This module collects meme reply posts from Bluesky firehose archives using a CLIP-based meme classifier.
 
