@@ -3,6 +3,8 @@
 .env.*
 *.env
 
+#log
+*.log
 
 # Python
 __pycache__/

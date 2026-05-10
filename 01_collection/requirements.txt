@@ -1,0 +1,28 @@
+# ════════════════════════════════════════════════════════════════
+#  01_collection/requirements.txt
+#  Bluesky Meme Reply Collection Pipeline
+#
+#  Setup:
+#    python -m venv collect_env
+#    source collect_env/bin/activate
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#    pip install -r requirements.txt
+# ════════════════════════════════════════════════════════════════
+
+# ── Core ────────────────────────────────────────────────────────
+numpy>=1.24.0
+Pillow>=10.0.0
+requests>=2.31.0
+tqdm>=4.66.0
+
+# ── PyTorch (CUDA 12.1 — install separately first) ───────────────
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ── Vision / CLIP ────────────────────────────────────────────────
+transformers>=4.49.0
+open_clip_torch>=2.24.0
+
+# ── OCR ─────────────────────────────────────────────────────────
+easyocr>=1.7.1
