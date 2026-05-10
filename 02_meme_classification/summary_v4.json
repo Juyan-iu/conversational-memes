@@ -1,0 +1,40 @@
+{
+  "model": "CLIP ViT-L/14@336 Multimodal + Gated Fusion",
+  "v4_improvements": [
+    "CLIP ViT-L/14@336px (224→336 고해상도)",
+    "전체 데이터 사용 (502 MEME, 736 NOT_MEME)",
+    "5-Fold CV 앙상블 (평균 val=0.8973)",
+    "Gated Fusion (학습 가능한 이미지/텍스트 가중합)",
+    "CutMix + MixUp 혼합 (50/50)",
+    "RandomErasing (p=0.25)",
+    "bfloat16 (A100 최적화)",
+    "Batch 64",
+    "TTA 12-view"
+  ],
+  "n_folds": 5,
+  "fold_best_val_accs": [
+    0.9005,
+    0.9289,
+    0.8667,
+    0.9,
+    0.8905
+  ],
+  "fold_mean_val_acc": 0.8973,
+  "test_accuracy": 0.9032,
+  "test_f1": 0.8889,
+  "test_roc_auc": 0.9767,
+  "confusion_matrix": [
+    [
+      96,
+      15
+    ],
+    [
+      3,
+      72
+    ]
+  ],
+  "v3_test_accuracy": 0.86,
+  "v3_test_auc": 0.9426,
+  "improvement_acc": 0.0432,
+  "improvement_auc": 0.0341
+}
