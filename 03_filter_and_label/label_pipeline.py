@@ -763,24 +763,48 @@ def process_record(record: dict, tree_3level: dict, tree_2level: dict,
 
     # 처리할 발화 정의
     # (key, post_dict, is_meme, context_builder)
-    original_post = record.get("original_post", {})
-    parent_reply  = record.get("parent_reply")
-    best_reply    = record.get("best_reply_before_meme")
-    meme_reply    = record.get("meme_reply", {})
-    comp_reply    = record.get("comparison_reply")
+    original_post  = record.get("original_post", {})
+    parent_reply   = record.get("parent_reply")
+    best_reply     = record.get("best_reply_before_meme")
+    meme_reply     = record.get("meme_reply", {})
+    comp_reply     = record.get("comparison_reply")
+    ancestor_chain = record.get("ancestor_chain") or []
+    quoted_post    = record.get("quoted_post")
 
-    # 컨텍스트: 원 포스트 텍스트
+    # ── 컨텍스트 구성 (카드에 보이는 것과 동일하게) ──────────────
     orig_text = get_post_text(original_post)
+    ctx_parts = []
+    if orig_text:
+        ctx_parts.append(f"[Original Post] {orig_text}")
+
+    # 원 포스트에 인용된 quoted post
+    if quoted_post:
+        quoted_text = get_post_text(quoted_post)
+        if quoted_text:
+            ctx_parts.append(f"[Quoted Post] {quoted_text}")
+
+    # ancestor chain (타래 중간 댓글들)
+    for i, anc in enumerate(ancestor_chain):
+        anc_text = get_post_text(anc)
+        if anc_text:
+            ctx_parts.append(f"[Reply {i+1}] {anc_text}")
+
+    # parent reply (대댓글인 경우)
+    parent_text = get_post_text(parent_reply) if parent_reply else ""
+    if parent_text:
+        ctx_parts.append(f"[Parent Reply] {parent_text}")
+
+    meme_context_text = "\n".join(ctx_parts)
 
     # 라벨링 대상:
     # - original_post: 라벨링 제외 (항상 Open 계열이므로)
-    # - parent_reply: 밈이 대댓글인 경우만 (3레벨)
-    # - meme_reply: 항상 (2레벨 + Stance)
+    # - parent_reply: 밈이 대댓글인 경우만 (3레벨), 컨텍스트는 orig_text만
+    # - meme_reply: 항상 (2레벨 + Stance), 컨텍스트는 전체 타래
     is_re_reply = parent_reply is not None
 
     units = [
         ("parent_reply", parent_reply, False, orig_text) if is_re_reply else ("parent_reply", None, False, ""),
-        ("meme_reply",   meme_reply,   True,  orig_text),
+        ("meme_reply",   meme_reply,   True,  meme_context_text),
     ]
 
     for key, post, is_meme, ctx_text in units:

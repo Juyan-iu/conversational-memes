@@ -22,3 +22,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+
+# 수집 데이터 (records는 폴더 구조만 유지)
+**/records/*
+!**/records/.gitkeep
+
+# 가상환경
+*_env/

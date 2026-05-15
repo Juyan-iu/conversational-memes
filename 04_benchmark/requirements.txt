@@ -1,0 +1,41 @@
+# ════════════════════════════════════════════════════════════════
+#  benchmark_pipeline.py 의존성
+#
+#  설치 순서 중요! 아래 순서대로:
+#
+#  1) PyTorch (CUDA 12.1):
+#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+#  2) simple-lama-inpainting 먼저 (Pillow<10 당김):
+#     pip install simple-lama-inpainting
+#
+#  3) 나머지:
+#     pip install -r requirements.txt
+#
+#  * simple-lama-inpainting이 Pillow 9.x를 요구하므로
+#    Pillow 버전을 9.x로 고정
+# ════════════════════════════════════════════════════════════════
+
+# ── Core ────────────────────────────────────────────────────────
+torch>=2.2.0
+torchvision>=0.17.0
+numpy>=1.24.0
+# simple-lama-inpainting 호환 범위로 고정
+Pillow>=9.5.0,<10.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# ── Inpainting (LaMa GPU) ────────────────────────────────────────
+simple-lama-inpainting>=0.1.2
+
+# ── CLIP (ViT-L-14) ─────────────────────────────────────────────
+open_clip_torch>=2.24.0
+
+# ── OCR ─────────────────────────────────────────────────────────
+easyocr>=1.7.1
+
+# ── 키워드 추출 ───────────────────────────────────────────────────
+yake>=0.4.8
+
+# ── OpenCV (inpainting fallback) ─────────────────────────────────
+opencv-python>=4.9.0
