@@ -626,7 +626,6 @@ def main() -> int:
         sys.exit(f"[error] No items found under {eval_data_dir}")
     print(f"[LOAD] {len(items)} items  seed={args.seed}")
 
-    # 아이템별 info.txt 미리보기 (--num 지정 시)
     if items and args.num:
         print(f"\n{'─'*60}")
         print(f"[INFO.TXT PREVIEW — {len(items)} items]")
