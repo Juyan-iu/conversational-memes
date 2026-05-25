@@ -1,48 +1,33 @@
-# 02_classifier — MemeTector v4
+# 02_meme_classification - MemeTector Training
 
-CLIP-based meme image classifier used to identify meme replies in the Bluesky firehose.
+This folder contains the MemeTector v4 training notebook used to prepare the
+binary meme classifier for the collection pipeline in
+[`../01_collection`](../01_collection/README.md).
 
-## Overview
+## What This Stage Does
 
-MemeTector v4 is a binary classifier (MEME / NOT_MEME) built on top of `CLIP ViT-L/14@336px`. It uses a Gated Fusion architecture combining visual and OCR-text embeddings, trained with 5-Fold cross-validation and ensemble inference.
+`memetector_v4_a100_optimized (2).ipynb` trains a binary image classifier for
+MEME / NOT_MEME prediction. The trained checkpoints are then loaded by
+`../01_collection/meme_pipeline.py` to identify meme replies in Bluesky firehose
+archives.
 
-## Key Improvements over v3
+The classifier uses CLIP ViT-L/14@336px image and text encoders, OCR text from
+the image, a gated image/text fusion module, and a binary MLP classifier. The
+released training run uses 5-fold cross-validation and ensemble inference.
 
-| Component | v3 | v4 |
-|-----------|----|----|
-| Backbone | CLIP ViT-L/14 (224px) | **CLIP ViT-L/14@336px** |
-| Training data | MEME 500 / NOT_MEME 500 (sampled) | **ALL 502 / 736** (full dataset) |
-| Training strategy | Single split | **5-Fold CV + ensemble** |
-| Fusion | concat + cosine | **Gated Fusion** (learnable weighted sum) |
-| Augmentation | MixUp | **CutMix + MixUp + RandomErasing** |
-| Precision | float16 | **bfloat16** (A100 native, no overflow) |
-| Batch size | 32 | **64** |
-| TTA | 10-view | **12-view** |
+## Files
 
-**v3 gap:** Val 91.4% vs Test 86.0% (5.4% overfit)  
-**v4 solution:** 5-Fold ensemble + full data + stronger regularization
-
-## Training Data
-
-- `MEME/`: 502 meme images
-- `NOT_MEME/`: 736 non-meme images (602 NOT_MEME + 134 untitled)
-- Total: 1,238 images
-
-Data directory structure expected in Google Drive:
-```
-MyDrive/Meme_26SP/content/
-├── MEME/
-├── NOT_MEME/
-└── untitled folder/
+```text
+02_meme_classification/
+├── memetector_v4_a100_optimized (2).ipynb  # Training and evaluation notebook
+├── results_v4.png                          # Saved evaluation figure
+├── summary_v4.json                         # Saved evaluation metrics
+└── README.md
 ```
 
-## Pretrained Checkpoints
+Generated checkpoints are not tracked in git:
 
-5 fold checkpoints (~1.6 GB total) available on Google Drive:
-
-📁 **[Download Checkpoints](https://drive.google.com/drive/folders/1k5aMXj3_Ooyvc5aHVj6MyQHg6xA5qVkV?usp=drive_link)**
-
-```
+```text
 memetector_v4/
 ├── fold1_best.pth
 ├── fold2_best.pth
@@ -51,63 +36,149 @@ memetector_v4/
 └── fold5_best.pth
 ```
 
-Place downloaded checkpoints in `02_classifier/checkpoints/` before running inference in `01_collection/meme_pipeline.py`.
+## Model
 
-## Setup
+The notebook trains `MemeDetectorV4`, matching the architecture loaded by
+`01_collection/meme_pipeline.py`:
 
-This notebook is designed to run on **Google Colab with A100 GPU** (80GB VRAM recommended).
-
+```text
+Image -> CLIP ViT-L/14@336px -> visual embedding
+OCR text -> CLIP text encoder -> text embedding
+visual + text embeddings -> gated fusion
+image/text/fused/cosine features -> MLP classifier -> MEME / NOT_MEME
 ```
-Runtime → Change runtime type → A100 GPU
+
+Training details:
+
+```text
+Backbone:        openai/clip-vit-large-patch14-336
+Input size:      336 x 336
+Splits:          15% held-out test split, 5-fold CV on the remaining pool
+Training:        Phase 1 frozen CLIP head training, Phase 2 full fine-tuning
+Loss:            Focal loss with class weights and label smoothing
+Augmentation:    CutMix, MixUp, RandomErasing, RandAugment
+Precision:       bfloat16 on A100
+Inference:       5-fold ensemble, 12-view TTA in the notebook
+Threshold:       0.5
 ```
 
-Install dependencies (handled in notebook Cell 1):
+Note that `01_collection/meme_pipeline.py` can run the same fold checkpoints
+with faster inference settings. Its default collection configuration disables
+TTA for throughput.
+
+## Training Data
+
+The notebook expects a local or Google Drive directory with two binary classes:
+
+```text
+Meme_26SP/content/
+├── MEME/              # 502 meme images
+├── NOT_MEME/          # 602 non-meme images
+└── untitled folder/   # 134 additional non-meme images
+```
+
+The notebook combines `NOT_MEME/` and `untitled folder/` as the NOT_MEME class,
+for a total of 1,238 images:
+
+```text
+MEME:      502
+NOT_MEME:  736
+Total:   1,238
+```
+
+## Pretrained Checkpoints
+
+Instead of retraining, you can download the released 5-fold checkpoints:
+
+[Download checkpoints](https://drive.google.com/drive/folders/1k5aMXj3_Ooyvc5aHVj6MyQHg6xA5qVkV?usp=drive_link)
+
+After downloading or training, pass the checkpoint directory to stage 01:
+
+```bash
+python ../01_collection/meme_pipeline.py --run --date 2024-06-01 \
+  --archive-base /path/to/firehose_archives \
+  --model-dir /path/to/memetector_v4 \
+  --output-dir ../01_collection/meme_dataset
+```
+
+## Requirements
+
+- Google Colab or another CUDA environment
+- A100 GPU recommended for the released training configuration
+- Python 3.10+
+- Training images arranged as shown above
+
+The notebook installs its Python dependencies in the first cell:
+
 ```python
 !pip install transformers accelerate scikit-learn tqdm Pillow easyocr opencv-python-headless
 ```
 
-## Usage
+Core packages:
 
-Open `memetector_v4_a100_optimized.ipynb` in Google Colab:
-
-1. Mount Google Drive (Cell: `cell_drive`)
-2. Set `DATA_DIR` and `OUT_DIR` paths
-3. Run all cells sequentially
-4. Trained fold checkpoints saved to `OUT_DIR` in Google Drive
-
-## Architecture
-
-```
-Image → CLIP ViT-L/14@336px → Visual embedding (768-dim)
-Text (OCR) → CLIP text encoder → Text embedding (768-dim)
-                    ↓
-             Gated Fusion
-                    ↓
-            MLP classifier → MEME / NOT_MEME
+```text
+torch
+torchvision
+transformers
+accelerate
+scikit-learn
+Pillow
+easyocr
+opencv-python-headless
+tqdm
+matplotlib
+seaborn
 ```
 
-**Training:**
-- Phase 1: Frozen CLIP backbone, train fusion + classifier head
-- Phase 2: Unfreeze top CLIP layers, fine-tune end-to-end
-- Optimizer: AdamW with warmup + cosine decay
-- Augmentation: CutMix + MixUp + RandomErasing
+## Configure
 
-**Inference:**
-- 5-fold ensemble (average logits)
-- 12-view Test-Time Augmentation (TTA)
-- Threshold: 0.5
+In the notebook, update these paths before training:
 
-## Requirements
-
+```python
+DATA_DIR = "/content/drive/MyDrive/Meme_26SP/content/"
+OUT_DIR = "/content/drive/MyDrive/Meme_26SP/memetector_v4"
 ```
-torch>=2.2.0
-torchvision>=0.17.0
-transformers>=4.49.0
-easyocr>=1.7.1
-scikit-learn>=1.3.0
-opencv-python-headless>=4.9.0
-Pillow>=10.0.0
-tqdm>=4.66.0
-matplotlib>=3.7.0
-seaborn>=0.13.0
+
+`DATA_DIR` should contain the training folders. `OUT_DIR` is where the fold
+checkpoints, metric summary, and result figure will be saved.
+
+## Run
+
+Open the notebook in Google Colab, select an A100 runtime, and run the cells in
+order:
+
+```text
+1. Install dependencies.
+2. Mount Google Drive.
+3. Set DATA_DIR and OUT_DIR.
+4. Load MEME and NOT_MEME images.
+5. Extract OCR text and visual-part variants.
+6. Train 5 folds.
+7. Evaluate the ensemble on the held-out test split.
+8. Save fold checkpoints, results_v4.png, and summary_v4.json.
 ```
+
+## Results
+
+The included `summary_v4.json` reports:
+
+```text
+Mean best validation accuracy: 0.8973
+Held-out test accuracy:        0.9032
+Held-out test F1:              0.8889
+Held-out test ROC-AUC:         0.9767
+```
+
+These metrics document the classifier run used to prepare the checkpoints. Stage
+01 uses the checkpoints for candidate meme-reply collection rather than for
+benchmark evaluation directly.
+
+## Notes
+
+- This stage is required only if you want to train or inspect the classifier.
+  For reproducing collection, downloading the released fold checkpoints is
+  enough.
+- Keep the checkpoint filenames as `fold1_best.pth` through `fold5_best.pth`;
+  `01_collection/meme_pipeline.py` loads that naming pattern directly.
+- The training images and trained checkpoints are not tracked in git because of
+  size and data-release constraints.
