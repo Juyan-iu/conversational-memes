@@ -2,9 +2,9 @@
 
 Code release for **MemeConv: A Dataset and Benchmark for Meme Literacy in the Wild Online Conversations**.
 
-Folders `01_collection/` through `07_analysis/` are for reproducing the paper's pipeline and results. The `download/` folder is for accessing the released dataset and benchmark artifacts without re-running the full pipeline.
+Folders `01_collection/` through `07_analysis/` are for reproducing the paper's pipeline and results. The `download/` folder is for accessing the released dataset and benchmark artifact.
 
-This repository contains the pipelines used to collect naturally occurring meme replies from Bluesky, curate the MEMECONV dataset, build the contextual meme-selection benchmark, evaluate LVLMs, and run the context-conditioned meme-generation study.
+This repository contains the pipelines used to collect naturally occurring meme replies from Bluesky, curate the MemeConv dataset, build the contextual meme-selection benchmark, evaluate LVLMs, and run the context-conditioned meme-generation study.
 
 For setup and run commands, see the README inside each stage folder.
 
