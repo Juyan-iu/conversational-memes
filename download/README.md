@@ -1,15 +1,31 @@
-# download - Public UID Hydration Pipeline
+# download - Dataset and Benchmark Access
 
-This folder is for public reproduction of the released conversational meme
-dataset by UID. It does not re-run the meme classifier. Instead, it reads a UID
-manifest exported from `01_collection` and hydrates the same posts and
-conversation context from the public Bluesky API.
+This folder describes how to access the public MEMECONV artifacts without
+re-running the full collection pipeline. The released artifacts are separated by
+task:
 
-This is the first public data-collection step. Later steps can map classifier
-metadata, labels, benchmark membership, and provided distractors back onto the
-hydrated records by `uid`.
+| Artifact | Purpose | Path |
+| --- | --- | --- |
+| Full hydrated dataset | Reconstruct public posts, conversation context, and meme images by UID from the released manifest. | `download/hydrate_from_uid_manifest.py` |
+| Multiple-choice benchmark | Download or assemble the fixed recognition benchmark with answer and distractor images for evaluation. | Released `benchmark_data/` archive and `download/map_benchmark_assets.py` |
+| Generation task | Reproduce the context-conditioned meme-generation protocol. | `06_meme_generation/generate_memes_compare.py` |
 
-## Why a Manifest Is Needed
+The full dataset and the multiple-choice benchmark are intentionally separated.
+Hydration recovers public Bluesky records and image media by UID; the benchmark
+also includes constructed distractors and metadata that are task artifacts, not
+posts that can be recovered from the public API.
+
+## Full Dataset Hydration
+
+Use this path when you want the broad released dataset: one hydrated JSON record
+per UID, plus optional local image files. This step does not re-run the meme
+classifier. Instead, it reads a UID manifest exported from `01_collection` and
+hydrates the same posts and conversation context from the public Bluesky API.
+
+Later stages can map classifier metadata, labels, benchmark membership, and
+provided distractors back onto the hydrated records by `uid`.
+
+### Why a Manifest Is Needed
 
 Project UIDs look like this:
 
@@ -48,17 +64,18 @@ python export_uid_manifest.py \
   --out ../download/data/collection_pool_uid_manifest.jsonl
 ```
 
-## Files
+### Files
 
 ```text
 download/
 ├── download_manifest.py           # Download released manifest from Google Drive
 ├── hydrate_from_uid_manifest.py   # Hydrate records and optional images by UID
+├── map_benchmark_assets.py        # Join released labels to benchmark/distractor assets by UID
 ├── sample_uid_manifest.jsonl      # Tiny dry-run sample of the manifest format
 └── data/                          # Put released manifests here; not required by git
 ```
 
-## Manifest Format
+### Manifest Format
 
 Each JSONL row should contain:
 
@@ -84,7 +101,7 @@ Required fields are `uid` and either `meme_reply_uri` or `uri`. The other fields
 are URI pointers or structural indexes that make context recovery more exact
 when public thread traversal is incomplete.
 
-## Setup
+### Setup
 
 The hydration script uses only the Python standard library.
 
@@ -98,7 +115,7 @@ No Bluesky login is required. The script calls:
 https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread
 ```
 
-## Sample Runs
+### Sample Runs
 
 Validate the sample manifest without network calls:
 
@@ -152,7 +169,7 @@ python hydrate_from_uid_manifest.py \
   --download-images all
 ```
 
-## Output
+### Output
 
 ```text
 hydrated_records/
@@ -197,7 +214,40 @@ quote_count
 These counts are captured at hydration time and may differ from counts observed
 during the original firehose collection.
 
-## Image Options
+### Release Hydration Run Summary
+
+The following summary comes from the completed release hydration run reported in
+`hydration_report.json`. The run started on 2026-05-19 20:39:53 UTC and finished
+on 2026-05-20 06:37:12 UTC, for a total runtime of about 9 hours and 57 minutes.
+
+| Metric | Count | Rate |
+| --- | ---: | ---: |
+| Selected manifest rows | 22,031 | 100.0% |
+| Hydrated records | 21,671 | 98.4% |
+| Failed rows | 360 | 1.6% |
+| Image downloads attempted | 35,524 | 100.0% |
+| Images downloaded | 35,475 | 99.9% |
+| Image downloads failed | 49 | 0.1% |
+
+All hydrated records contain the same top-level schema fields. Optional context
+fields are present for every record but are `null` when the referenced public
+post was unavailable or the manifest did not include that context.
+
+| Field | Present | Non-null | Non-null rate |
+| --- | ---: | ---: | ---: |
+| `uid` | 21,671 | 21,671 | 100.0% |
+| `uri` | 21,671 | 21,671 | 100.0% |
+| `original_post` | 21,671 | 21,671 | 100.0% |
+| `parent_reply` | 21,671 | 7,776 | 35.9% |
+| `quoted_post` | 21,671 | 3,461 | 16.0% |
+| `meme_reply` | 21,671 | 21,671 | 100.0% |
+| `thread_structure` | 21,671 | 21,671 | 100.0% |
+| `best_reply_before_meme` | 21,671 | 10,513 | 48.5% |
+| `closest_text_reply` | 21,671 | 18,365 | 84.7% |
+| `closest_sibling_text_reply` | 21,671 | 12,350 | 57.0% |
+| `comparison_reply` | 21,671 | 18,526 | 85.5% |
+
+### Image Options
 
 `--download-images` controls how much media is fetched:
 
@@ -216,7 +266,7 @@ For benchmark reproduction, the correct answer image and conversation context
 can be hydrated here. Visual distractors can be distributed separately and joined
 later by UID.
 
-## Availability Notes
+### Availability Notes
 
 Hydration is best-effort because public posts and CDN images can disappear after
 the original collection. Failed rows are recorded in `hydration_report.json`.
@@ -228,3 +278,91 @@ an `in_archive: false` stub.
 collection step. Optional context fields such as `parent_reply`, `quoted_post`,
 and auxiliary comparison replies can be present with `null` values when the
 manifest or public API does not provide them.
+
+## Multiple-Choice Benchmark Download
+
+Use this path when you want the fixed recognition benchmark used for
+multiple-choice VLM evaluation. The benchmark package should be downloaded as a
+prebuilt `benchmark_data/` directory and placed under `download/`:
+
+```text
+download/
+└── benchmark_data/
+    ├── benchmark_summary.jsonl
+    ├── <uid>/
+    │   ├── A_original.jpg
+    │   ├── B_text_distractor.jpg
+    │   ├── C_visual_distractor.jpg
+    │   ├── D_easy_distractor.jpg
+    │   └── meta.json
+    └── ...
+```
+
+The full hydrated dataset can recover the correct answer image and conversation
+context, but it does not recreate the exact benchmark distractors. For
+comparable evaluation numbers, use the released benchmark download.
+
+### Benchmark Asset Mapping
+
+`map_benchmark_assets.py` assembles benchmark-aligned release records by joining
+UID-based label records with benchmark membership rows and provided distractor
+asset rows. It accepts JSONL, JSON, CSV, or TSV mapping files as long as they
+contain a UID column.
+
+Use it when you have:
+
+- a released labeled record file, such as `labeled_release.jsonl`
+- a benchmark membership file, such as `benchmark_summary.jsonl`
+- an optional distractor asset table keyed by `uid`
+
+Example:
+
+```bash
+python map_benchmark_assets.py \
+  --input data/labeled_release.jsonl \
+  --benchmark-map benchmark_data/benchmark_summary.jsonl \
+  --distractors data/distractor_assets.jsonl \
+  --out benchmark_mapped \
+  --no-copy-images
+```
+
+The output adds benchmark fields to each matched record:
+
+```text
+benchmark_mapped/
+├── records/<uid>.json
+├── benchmark_mapped_records.jsonl
+└── mapping_report.json
+```
+
+Each written record includes:
+
+- `benchmark_membership`: benchmark rows matched by UID
+- `distractor_assets`: provided distractor rows matched by UID
+- `mapping_metadata`: source paths, join key, and mapping timestamp
+
+By default, the script also copies any local images referenced by `local_path`
+into the output directory. Use `--no-copy-images` when mapping metadata only or
+when the benchmark image archive is already distributed separately.
+
+## Generation Task Code
+
+For the generation task, provide code and protocol rather than treating generated
+images as the primary downloadable dataset. Generated outputs depend on the
+image model version, API behavior, prompts, random seed, and generation date, so
+the most reproducible release artifact is the script plus enough metadata to
+rerun the same setup.
+
+The included implementation is
+[`../06_meme_generation/generate_memes_compare.py`](../06_meme_generation/generate_memes_compare.py).
+It generates paired outputs for each sampled record:
+
+```text
+A) w/o context: visual description only
+B) w/ context: visual description + conversation context + stance labels
+```
+
+If generated samples are released, treat them as an optional snapshot and record
+the model name, generation date, prompts, sample seed, and source UIDs alongside
+the images. The code path in `06_meme_generation/` should remain the canonical
+artifact for reproducing or extending the generation task.
