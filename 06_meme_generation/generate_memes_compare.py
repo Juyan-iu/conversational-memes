@@ -2,14 +2,13 @@
 """
 generate_memes_compare.py
 
-labeled_memes.jsonl에서 상위 N개 샘플로
-Version A (visual_description only) + Version B (conversation context)
-× dall-e-3 + gpt-image-1 조합으로 밈 이미지를 생성하고
-결과를 HTML 뷰어로 출력한다.
+Generate meme images for the top N sampled records from labeled_memes.jsonl
+using Version A (visual_description only) and Version B (conversation context),
+then write the results to an HTML viewer.
 
-총 이미지 수: N × 2 (version) × 2 (model) = N × 4
+Total image count: N x 2 versions x number of configured models.
 
-사용법:
+Usage:
   python generate_memes_compare.py --n 3
   python generate_memes_compare.py --n 50 --out ./generated
 """
@@ -41,7 +40,7 @@ IMAGE_SIZE    = "1024x1024"
 MODELS        = ["gpt-image-2"]
 
 # ════════════════════════════════════════════════════════════════
-#  데이터 로딩
+#  Data loading
 # ════════════════════════════════════════════════════════════════
 
 def load_top_n(jsonl_path: str, n: int, seed: int = 42) -> list[dict]:
@@ -59,7 +58,7 @@ def load_top_n(jsonl_path: str, n: int, seed: int = 42) -> list[dict]:
             vd = ((r.get("discourse_labels") or {}).get("meme_reply") or {}).get("visual") or {}
             if not vd.get("visual_description"):
                 continue
-            # 대화 맥락이 풍부한 것만 (parent_reply 있는 것)
+            # Keep only records with richer conversational context.
             if not r.get("parent_reply"):
                 continue
             records.append(r)
@@ -68,7 +67,7 @@ def load_top_n(jsonl_path: str, n: int, seed: int = 42) -> list[dict]:
     return records[:n]
 
 # ════════════════════════════════════════════════════════════════
-#  컨텍스트 빌더
+#  Context builders
 # ════════════════════════════════════════════════════════════════
 
 def build_context_text(record: dict) -> str:
@@ -142,7 +141,7 @@ def build_thread_display(record: dict) -> list[dict]:
     return thread
 
 # ════════════════════════════════════════════════════════════════
-#  프롬프트 빌더
+#  Prompt builders
 # ════════════════════════════════════════════════════════════════
 
 def build_prompt_a(record: dict) -> str:
@@ -185,7 +184,7 @@ def build_prompt_b(record: dict) -> str:
     )
 
 # ════════════════════════════════════════════════════════════════
-#  이미지 생성 (client.images.generate)
+#  Image generation (client.images.generate)
 # ════════════════════════════════════════════════════════════════
 
 def generate_image(
@@ -206,7 +205,7 @@ def generate_image(
             size=IMAGE_SIZE,
             
         )
-        # b64_json 우선, 없으면 url 다운로드
+        # Prefer b64_json; fall back to downloading the returned URL.
         item = resp.data[0]
         if item.b64_json:
             out_path.write_bytes(base64.b64decode(item.b64_json))
@@ -222,7 +221,7 @@ def generate_image(
         return None
 
 # ════════════════════════════════════════════════════════════════
-#  HTML 생성
+#  HTML generation
 # ════════════════════════════════════════════════════════════════
 
 def img_to_b64_src(path: str | None) -> str:
@@ -241,7 +240,7 @@ def generate_html(results: list[dict]) -> str:
         thread        = r["thread"]
         visual_desc   = r.get("visual_description", "")
 
-        # 스레드 HTML
+        # Thread HTML
         thread_html = ""
         for msg in thread:
             role    = msg["role"]
@@ -260,7 +259,7 @@ def generate_html(results: list[dict]) -> str:
               {f'<div class="msg-imgs">{imgs_html}</div>' if imgs_html else ''}
             </div>"""
 
-        # 생성 이미지 그리드: A/dall-e-3, A/gpt-image-1, B/dall-e-3, B/gpt-image-1
+        # Generated image grid: A/model, B/model.
         combos = [
             ("A", "gpt-image-2", "w/o context"),
             ("B", "gpt-image-2", "w/ context"),
@@ -274,7 +273,7 @@ def generate_html(results: list[dict]) -> str:
             img_tag  = (
                 f'<img src="{src}" alt="generated meme">'
                 if src else
-                '<div class="no-img">생성 실패</div>'
+                '<div class="no-img">Generation failed</div>'
             )
             grid_html += f"""
             <div class="gen-cell">
@@ -448,7 +447,7 @@ def generate_html(results: list[dict]) -> str:
 </html>"""
 
 # ════════════════════════════════════════════════════════════════
-#  메인
+#  Main
 # ════════════════════════════════════════════════════════════════
 
 def main():
@@ -465,10 +464,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     target = args.n
-    pool_size = target * 3  # 실패 고려해서 3배 풀
-    print(f"[LOAD] {pool_size}개 풀에서 {target}개 완성 목표...")
+    pool_size = target * 3  # Use a larger pool to allow for generation failures.
+    print(f"[LOAD] Targeting {target} complete samples from a pool of {pool_size}...")
     all_records = load_top_n(args.jsonl, pool_size, seed=args.seed)
-    print(f"  풀: {len(all_records)}개\n")
+    print(f"  Pool size: {len(all_records)}\n")
 
     results = []
     attempted = 0
@@ -479,7 +478,7 @@ def main():
 
         attempted += 1
         uid = record.get("uid", f"sample_{attempted}")
-        print(f"[{len(results)+1}/{target}] {uid} (시도 {attempted})")
+        print(f"[{len(results)+1}/{target}] {uid} (attempt {attempted})")
 
         sample_dir = out_dir / uid
         sample_dir.mkdir(exist_ok=True)
@@ -517,7 +516,7 @@ def main():
             time.sleep(args.delay)
 
         if not success:
-            print(f"  → 일부 실패, 스킵 ({uid})")
+            print(f"  -> Partial failure, skipping ({uid})")
             print()
             continue
 
@@ -529,17 +528,17 @@ def main():
             "prompts":        prompts,
             "visual_description": vd.get("visual_description", ""),
         })
-        print(f"  → 완성 ({len(results)}/{target})")
+        print(f"  -> Complete ({len(results)}/{target})")
         print()
 
-    print(f"\n완성: {len(results)}/{target}개 (시도: {attempted}개)")
+    print(f"\nCompleted: {len(results)}/{target} samples (attempted: {attempted})")
 
-    # HTML 저장
+    # Save HTML
     ts       = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     html_out = out_dir / f"comparison_{ts}.html"
     html_out.write_text(generate_html(results), encoding="utf-8")
 
-    # JSON 저장
+    # Save JSON
     json_out = out_dir / f"results_{ts}.json"
     json_out.write_text(
         json.dumps([{k: v for k, v in r.items() if k != "thread"} for r in results],
