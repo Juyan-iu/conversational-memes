@@ -1,1 +1,0 @@
-This is a taxonomy of Speech Functions adapted for meme discourse analysis. The taxonomy covers two levels of conversational functions, focusing on how meme utterances initiate or react to conversations in online social media contexts. Memes are visual-textual artifacts used to express opinions, emotions, and reactions in online conversations.
