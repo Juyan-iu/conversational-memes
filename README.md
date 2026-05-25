@@ -1,4 +1,4 @@
-# MEMECONV
+# \textsc{MemeConv}
 
 Code release for **MEMECONV: A Dataset and Benchmark for Meme Literacy in the Wild Online Conversations**.
 
