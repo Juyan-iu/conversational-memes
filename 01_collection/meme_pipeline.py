@@ -2,27 +2,29 @@
 """
 Bluesky Meme Reply Detector — v4 (multi-day)
 
-사용법:
-  # 단일 날짜 미리보기
+Usage:
+  # Preview one day
   python meme_pipeline.py --preview --date 2023-09-01
 
-  # 단일 날짜 실행
+  # Run one day
   python meme_pipeline.py --run --date 2023-09-01
 
-  # 월 전체 실행 (2023-09-01 ~ 2023-09-30)
+  # Run one full month (2023-09-01 to 2023-09-30)
   python meme_pipeline.py --run --month 2023-09
 
-  # 날짜 범위 실행
+  # Run a date range
   python meme_pipeline.py --run --start 2023-09-01 --end 2023-09-30
 
-[root post 조회 방식]
-  rkey는 AT Protocol TID (timestamp-based ID) 형식.
-  rkey에서 날짜를 역산해 해당 날짜 아카이브 파일에서 post를 찾음.
-  못 찾으면 인접 날짜(최대 30일 전)까지 스캔.
-  캐시(LRU, 최대 14일)로 중복 파일 로드 방지.
+[Root post lookup]
+  rkeys use the AT Protocol TID (timestamp-based ID) format.
+  The script estimates the post date from the rkey and searches that daily
+  archive first. If the post is not found, it scans nearby prior days up to the
+  configured lookup window. An LRU cache avoids repeatedly loading the same
+  daily archive files.
 
-[통계]
-  stats.json: 날짜별 이미지댓글수, 밈수, 밈비율 등
+[Statistics]
+  stats.json stores daily image-reply counts, meme counts, meme ratios, and
+  related run statistics.
 """
 
 import os, sys, re, json, gzip, gc, time, argparse, hashlib, random, shutil
@@ -49,7 +51,7 @@ import easyocr
 # ════════════════════════════════════════════════════════════════
 
 CONFIG = {
-    # 아카이브 루트: 하위에 2023-08/, 2023-09/ ... 폴더
+    # Archive root containing subdirectories such as 2023-08/, 2023-09/, ...
     "archive_base": "/home/exouser/slate_project/bluesky/firehose_archives",
 
     "model_dir":    "/home/exouser/checkpoints",
@@ -59,23 +61,23 @@ CONFIG = {
     "meme_threshold":   0.5,
     "download_retries": 3,
     "request_timeout":  15,
-    "use_tta":          False,     # TTA 비활성화 (속도 6x 향상)
+    "use_tta":          False,     # Disable TTA for faster inference.
     "single_fold":      None,     # None=5-fold ensemble, 1~5=single model
 
-    # cross-day 조회 캐시 크기 (일 수)
+    # Cross-day lookup cache size, in days.
     "archive_cache_size": 7,
-    # root post 검색 최대 소급 일수
-    # 0 = TID 추정 날짜 1회만 시도 (속도 우선), 7 = 최대 7일 소급 (컨텍스트 품질 우선)
+    # Maximum number of prior days to search for root posts.
+    # 0 = try only the TID-estimated date, 7 = search up to 7 prior days.
     "lookup_max_days_back": 0,
 
-    # 하루 최대 처리 image reply 수 (None = 전체, 숫자 = 랜덤 샘플링)
-    # CDN rate-limit / 파일 크기 문제 완화용
+    # Maximum number of image replies to process per day.
+    # None processes all rows; an integer enables random sampling.
     "daily_sample_size": None,
 
-    # 언어 필터: 이 언어 중 하나라도 포함된 meme reply만 처리
-    # None 또는 [] 이면 필터 없음
+    # Language filter: keep meme replies that contain at least one of these tags.
+    # None or [] disables language filtering.
     "lang_filter": ["en"],
-    # True: langs가 null/빈 경우 제외 / False: null이면 포함 (관대한 처리)
+    # True excludes null/empty langs; False keeps them.
     "lang_filter_strict": False,
 }
 
@@ -109,9 +111,10 @@ def rkey_to_date(rkey: str) -> date | None:
 
 def passes_lang_filter(post: dict) -> bool:
     """
-    언어 필터 통과 여부.
-    CONFIG['lang_filter']가 비어있으면 모두 통과.
-    langs 필드가 null/빈 경우: lang_filter_strict=False면 통과, True면 제외.
+    Return whether a post passes the configured language filter.
+    If CONFIG['lang_filter'] is empty, all posts pass.
+    If langs is null/empty, lang_filter_strict=False keeps the post and
+    lang_filter_strict=True excludes it.
     """
     lang_filter = CONFIG.get('lang_filter') or []
     if not lang_filter:
@@ -127,7 +130,7 @@ def archive_path(base: str, d: date) -> Path:
 
 
 # ════════════════════════════════════════════════════════════════
-#  embed 문자열 파싱
+#  Embed parsing
 # ════════════════════════════════════════════════════════════════
 
 def is_image_embed(embed) -> bool:
@@ -145,15 +148,15 @@ def _parse_embed_dict(embed: dict, did: str) -> list:
     t = embed.get('$type', '')
     if t == 'app.bsky.embed.recordWithMedia':
         media = embed.get('media')
-        embed = media if isinstance(media, dict) else {}  # media가 int 등 비정상 포맷 대응
+        embed = media if isinstance(media, dict) else {}  # Handle malformed media values.
     raw_images = embed.get('images', []) if isinstance(embed, dict) else []
     images = []
     for img in raw_images:
         alt  = img.get('alt', '')
         blob = img.get('image', {})
-        # 형태 1: ref → {'$link': 'cid'}
-        # 형태 2: ref → 'cid' (문자열)
-        # 형태 3: cid → 'cid' (직접)
+        # Form 1: ref -> {'$link': 'cid'}
+        # Form 2: ref -> 'cid'
+        # Form 3: cid -> 'cid'
         ref = blob.get('ref', '')
         if isinstance(ref, dict):
             cid = ref.get('$link', '')
@@ -171,15 +174,15 @@ def _parse_embed_dict(embed: dict, did: str) -> list:
 
 
 def parse_embed_images(embed, did: str) -> list:
-    """embed (dict / Python repr 문자열 / dict repr 문자열) → [{'cid', 'alt', 'url'}, ...]"""
+    """Convert embed data (dict / Python repr string / dict repr string) to image metadata."""
     if not is_image_embed(embed):
         return []
 
-    # ── dict 포맷 ─────────────────────────────────────────────
+    # -- dict format -------------------------------------------------
     if isinstance(embed, dict):
         return _parse_embed_dict(embed, did)
 
-    # ── 문자열 포맷: dict repr인 경우 ast.literal_eval로 파싱 ──
+    # -- string format: parse dict repr with ast.literal_eval --------
     if isinstance(embed, str) and embed.strip().startswith('{'):
         import ast
         try:
@@ -189,7 +192,7 @@ def parse_embed_images(embed, did: str) -> list:
         except Exception:
             pass
 
-    # ── 구 포맷: Python repr 문자열 Image(...) ────────────────
+    # -- legacy format: Python repr string Image(...) ----------------
     images = []
     for chunk in embed.split('Image(')[1:]:
         alt = ''
@@ -212,11 +215,11 @@ def parse_embed_images(embed, did: str) -> list:
 
 
 # ════════════════════════════════════════════════════════════════
-#  레코드 파싱
+#  Record parsing
 # ════════════════════════════════════════════════════════════════
 
 def _safe_uri(val):
-    """uri 값이 list인 경우 첫 번째 항목, 문자열이면 그대로, 그 외는 None."""
+    """Return a URI string, the first list item, or None for unsupported values."""
     if isinstance(val, list):
         return val[0] if val else None
     if isinstance(val, str):
@@ -247,25 +250,25 @@ def parse_datetime_safe(s: str) -> datetime:
 
 
 def obj_to_post(obj: dict) -> dict | None:
-    """파이어호스 레코드 → post dict. 포스트 아니거나 delete면 None.
+    """Convert a firehose record to a post dict; return None for non-posts/deletes.
 
-    아카이브 포맷 변화 대응:
-      구 포맷 (≤2023-09-16 경): parent/root 최상위, create_time
-      신 포맷 (≥2023-09-26~):   reply.{parent,root} 중첩, createdAt
+    Handles archive format changes:
+      Legacy format (around <= 2023-09-16): top-level parent/root, create_time
+      Newer format (around >= 2023-09-26): nested reply.{parent,root}, createdAt
     """
     if obj.get('type') != 'app.bsky.feed.post' or obj.get('action') == 'delete':
         return None
     uri     = obj.get('uri', '')
     did     = obj.get('author', '')
-    # 포맷 변화: create_time (구) → createdAt (신)
+    # Format change: create_time (legacy) -> createdAt (newer).
     created = obj.get('create_time') or obj.get('createdAt') or obj.get('commit_time', '')
-    # 포맷 변화: embed 최상위 (구) — 신 포맷도 최상위이지만 record 안에도 있을 수 있음
+    # Format change: embed is usually top-level, but may also appear under record.
     embed   = obj.get('embed') or (obj.get('record') or {}).get('embed')
     images  = parse_embed_images(embed, did) if embed else []
 
-    # 포맷 변화: parent/root 직접 (구) → reply.{parent,root} 중첩 (신)
-    # 주의: reply/parent/root 필드가 dict이 아닌 int 등일 수 있음 (2024+ 포맷 변화)
-    # 주의: uri 필드 자체가 list로 오는 포맷도 존재 (2024-06 이후 일부 레코드)
+    # Format change: direct parent/root (legacy) -> nested reply.{parent,root}.
+    # Some 2024+ records contain non-dict reply/parent/root values.
+    # Some records after 2024-06 contain URI fields as lists.
     _reply     = obj.get('reply')
     reply_ref  = _reply if isinstance(_reply, dict) else {}
     _parent    = reply_ref.get('parent') or obj.get('parent')
@@ -296,12 +299,12 @@ def obj_to_post(obj: dict) -> dict | None:
 
 
 # ════════════════════════════════════════════════════════════════
-#  단일 날짜 아카이브 로드
+#  Single-day archive loading
 # ════════════════════════════════════════════════════════════════
 
 def load_day(d: date, base: str, verbose: bool = True) -> dict | None:
     """
-    하루치 아카이브 로드.
+    Load one daily archive.
     Returns dict with by_uri, by_parent, by_root, image_replies
     or None if file doesn't exist.
     """
@@ -344,7 +347,7 @@ def load_day(d: date, base: str, verbose: bool = True) -> dict | None:
                         image_replies.append(uri)
 
             elif rtype == 'app.bsky.feed.like':
-                # 구 포맷: 'root' 키 / 신 포맷(2024-06~): 'subject' 키
+                # Legacy format: 'root'; newer format (2024-06+): 'subject'.
                 root_info = obj.get('subject') or obj.get('root') or {}
                 liked_uri = _safe_uri(root_info.get('uri')) if isinstance(root_info, dict) else None
                 if liked_uri:
@@ -364,13 +367,13 @@ def load_day(d: date, base: str, verbose: bool = True) -> dict | None:
 
 
 # ════════════════════════════════════════════════════════════════
-#  ArchiveManager — cross-day post 조회
+#  ArchiveManager - cross-day post lookup
 # ════════════════════════════════════════════════════════════════
 
 class ArchiveManager:
     """
-    여러 날짜 아카이브에서 post URI를 조회.
-    LRU 캐시로 최대 N일치 by_uri를 메모리에 유지.
+    Look up post URIs across multiple daily archives.
+    Keeps up to N days of by_uri indexes in an LRU cache.
     """
 
     def __init__(self, base: str, cache_size: int = 14,
@@ -381,7 +384,7 @@ class ArchiveManager:
         self._cache        = OrderedDict()   # date_str → {uri: compact_post}
 
     def _compact(self, by_uri: dict) -> dict:
-        """by_uri에서 lookup에 필요한 필드만 남긴 compact dict"""
+        """Keep only the by_uri fields needed for lookup."""
         keep = ('uid','uri','did','rkey','seq','text','langs','post_url',
                 'created_at','is_reply','is_re_reply','parent_uri','root_uri',
                 'images','has_image','like_count','reply_count','_dt')
@@ -406,19 +409,21 @@ class ArchiveManager:
                current_idx: dict | None = None,
                cache_only: bool = False) -> dict | None:
         """
-        uri를 여러 아카이브에서 탐색.
-        cache_only=True : 디스크 I/O 없이 메모리(current_idx + 기존 캐시)만 검색.
-                          저장 직전 context 조회처럼 지연이 허용되지 않는 경우에 사용.
-        cache_only=False: 기존 동작 — TID 추정 + 소급 검색 (디스크 로드 있음).
+        Search for a URI across available archives.
+        cache_only=True: search only memory (current_idx + existing cache) and
+                         perform no disk I/O. Useful for latency-sensitive
+                         context lookup immediately before saving.
+        cache_only=False: use the TID-estimated date plus prior-day search,
+                          loading archives from disk as needed.
         """
         if not uri:
             return None
 
-        # 1) 오늘 아카이브에 있으면 바로 반환
+        # 1) Return immediately if the post is in today's archive.
         if current_idx and uri in current_idx['by_uri']:
             return current_idx['by_uri'][uri]
 
-        # cache_only: 이미 로드된 캐시만 뒤짐 (디스크 접근 없음)
+        # cache_only: search only already-loaded indexes, with no disk access.
         if cache_only:
             for cached in self._cache.values():
                 post = cached.get(uri)
@@ -426,7 +431,7 @@ class ArchiveManager:
                     return post
             return None
 
-        # 2) rkey TID 디코딩으로 예상 날짜 추정
+        # 2) Estimate the post date by decoding the rkey TID.
         rkey = uri.split('/')[-1]
         tid_date = rkey_to_date(rkey)
 
@@ -434,7 +439,7 @@ class ArchiveManager:
         if tid_date and tid_date != current_date:
             dates_to_try.append(tid_date.strftime('%Y-%m-%d'))
 
-        # 3) 소급 검색 (오늘 기준 1~max_days_back일 전)
+        # 3) Search prior days relative to the current date.
         for delta in range(1, self.max_days_back + 1):
             d_str = (current_date - timedelta(days=delta)).strftime('%Y-%m-%d')
             if d_str not in dates_to_try:
@@ -450,7 +455,7 @@ class ArchiveManager:
 
 
 # ════════════════════════════════════════════════════════════════
-#  스레드 컨텍스트
+#  Thread context
 # ════════════════════════════════════════════════════════════════
 
 def build_context(meme_uri: str, day_idx: dict,
@@ -465,15 +470,15 @@ def build_context(meme_uri: str, day_idx: dict,
     root_uri   = meme['root_uri']
     parent_uri = meme['parent_uri']
 
-    # root/parent 포스트 조회
-    # cache_only=True(기본): 디스크 I/O 없이 메모리만 검색 → 저장 지연 없음
+    # Look up root/parent posts.
+    # cache_only=True (default): search memory only, avoiding save-time disk I/O.
     root_post   = mgr.lookup(root_uri,   current_date, day_idx, cache_only=cache_only)
     parent_post = mgr.lookup(parent_uri, current_date, day_idx, cache_only=cache_only) if meme['is_re_reply'] else None
 
     depth       = 2 if meme['is_re_reply'] else 1
     depth_label = {1: 'reply', 2: 're-reply', 3: 're-re-reply'}.get(depth, f'depth-{depth}')
 
-    # siblings = 같은 parent에 달린 다른 댓글
+    # siblings = other replies attached to the same parent.
     siblings = [by_uri[u] for u in by_parent.get(parent_uri, [])
                 if u != meme_uri and u in by_uri]
 
@@ -484,7 +489,7 @@ def build_context(meme_uri: str, day_idx: dict,
     best_before = (max(before_meme, key=lambda p: p['like_count'])
                    if before_meme else None)
 
-    # closest text reply (same root thread, current archive) — 2순위: timely
+    # closest text reply (same root thread, current archive) - second priority: timely.
     text_only = [
         by_uri[u] for u in by_root.get(root_uri, [])
         if u in by_uri and u != meme_uri
@@ -496,7 +501,7 @@ def build_context(meme_uri: str, day_idx: dict,
         if text_only else None
     )
 
-    # 1순위: timely + structural = sibling 중 시간상 가장 가까운 텍스트 댓글
+    # First priority: timely + structural = temporally closest text sibling.
     sibling_text = [p for p in siblings if not p['has_image'] and p['text'].strip()]
     closest_sibling_text = (
         min(sibling_text, key=lambda p: abs((p['_dt'] - meme_dt).total_seconds()))
@@ -516,7 +521,7 @@ def build_context(meme_uri: str, day_idx: dict,
 
 
 # ════════════════════════════════════════════════════════════════
-#  JSON 직렬화
+#  JSON serialization
 # ════════════════════════════════════════════════════════════════
 
 _BASE_FIELDS = (
@@ -526,11 +531,11 @@ _BASE_FIELDS = (
 )
 
 def _extract_external(post: dict) -> dict:
-    """embed에서 외부 링크 제목/URL 추출 (article embed 등)"""
+    """Extract external link title/URL metadata from embeds."""
     embed = post.get('embed')
     if not embed:
         return {}
-    # dict 포맷
+    # dict format
     if isinstance(embed, dict):
         t = embed.get('$type', '')
         if t in ('app.bsky.embed.external', 'app.bsky.embed.external#view'):
@@ -540,7 +545,7 @@ def _extract_external(post: dict) -> dict:
                 'external_url':         ext.get('uri'),
                 'external_description': ext.get('description'),
             }
-        # recordWithMedia 안의 external
+        # external inside recordWithMedia
         if t in ('app.bsky.embed.recordWithMedia', 'app.bsky.embed.recordWithMedia#view'):
             media = embed.get('media', {}) or {}
             if 'external' in media:
@@ -550,7 +555,7 @@ def _extract_external(post: dict) -> dict:
                     'external_url':         ext.get('uri'),
                     'external_description': ext.get('description'),
                 }
-    # 구 string repr 포맷 (간단 regex)
+    # legacy string repr format (simple regex)
     if isinstance(embed, str) and 'External(' in embed:
         m = re.search(r"title='((?:[^'\\]|\\.)*)'", embed)
         title = m.group(1) if m else None
@@ -578,7 +583,7 @@ def post_to_dict(post: dict | None,
 
 
 def post_stub(uri: str) -> dict:
-    """아카이브에 없는 포스트 — URI만 보존"""
+    """Return a URI-only stub for posts missing from the archive."""
     return {
         'uri': uri, 'uid': uri_to_uid(uri),
         'in_archive': False,
@@ -621,7 +626,7 @@ def build_record(ctx: dict, meme_prob: float,
     ct_dict = _with_delta(ct)
     cs_dict = _with_delta(cs)
 
-    # comparison_reply: 1순위(timely+structural) → 2순위(timely) → 3순위(structural)
+    # comparison_reply: first priority timely+structural, then timely, then structural.
     if cs:
         comp_dict = cs_dict.copy()
         comp_dict['selected_by'] = 'timely_structural'
@@ -668,7 +673,7 @@ def build_record(ctx: dict, meme_prob: float,
         # [3a] closest sibling text reply (timely + structural)
         'closest_sibling_text_reply': cs_dict,
 
-        # [선택된 비교 댓글] 1순위 timely+structural → 2순위 timely → 3순위 structural
+        # Selected comparison reply: timely+structural, then timely, then structural.
         'comparison_reply': comp_dict,
 
         # metadata
@@ -679,10 +684,10 @@ def build_record(ctx: dict, meme_prob: float,
 
 
 # ════════════════════════════════════════════════════════════════
-#  이미지 다운로드
+#  Image download
 # ════════════════════════════════════════════════════════════════
 
-# 모듈 레벨 Session — TCP 연결 재사용으로 속도 향상
+# Module-level Session reuses TCP connections for faster downloads.
 _SESSION = requests.Session()
 _SESSION.headers.update({'User-Agent': 'MemeResearchBot/1.0 (academic research)'})
 
@@ -718,12 +723,12 @@ def download_post_images(post: dict, folder: Path, output_dir: Path,
         url  = img['url']
         path = folder / post['uid'] / f"{cid}.jpg"
 
-        # 기존 파일이 있어도 실제 읽기 검증 (이전 kill로 인한 깨진 파일 대응)
+        # Verify existing files by reading them; previous interrupted runs may leave corrupt files.
         ok = False
         if path.exists():
             try:
                 tmp = Image.open(path)
-                tmp.load()   # lazy open이 아닌 실제 데이터 로드
+                tmp.load()   # Force data loading instead of relying on lazy open.
                 ok = True
             except Exception:
                 try: path.unlink(missing_ok=True)
@@ -816,7 +821,7 @@ def load_models(model_dir, clip_name, device, single_fold=None):
 
 
 def run_ocr(pil_img, reader, thresh=0.25, max_chars=200, timeout=10):
-    """OCR 실행. timeout 초 내에 완료 안 되면 빈 문자열 반환."""
+    """Run OCR and return an empty string if it does not finish within timeout seconds."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
     def _ocr():
         try:
@@ -828,7 +833,7 @@ def run_ocr(pil_img, reader, thresh=0.25, max_chars=200, timeout=10):
             return ''
     ex = ThreadPoolExecutor(max_workers=1)
     fut = ex.submit(_ocr)
-    ex.shutdown(wait=False)   # ← 스레드 기다리지 않고 즉시 반환
+    ex.shutdown(wait=False)   # Return immediately without waiting for the worker thread.
     try:
         return fut.result(timeout=timeout)
     except Exception:
@@ -836,7 +841,7 @@ def run_ocr(pil_img, reader, thresh=0.25, max_chars=200, timeout=10):
 
 
 def classify(pil_img, ocr_text, models, processor, device, use_tta=True):
-    """CLIP 5-fold 앙상블 분류. GPU 전용 (OCR는 CPU 사용 중)."""
+    """Run CLIP 5-fold ensemble classification. OCR runs on CPU when enabled."""
     augs  = TTA_AUGS if use_tta else [TTA_AUGS[0]]
     text  = ocr_text.strip() or DEFAULT_OCR
     dtype = torch.bfloat16 if device == 'cuda' else torch.float32
@@ -861,10 +866,10 @@ def classify(pil_img, ocr_text, models, processor, device, use_tta=True):
 
 def classify_batch(pil_imgs: list, ocr_texts: list,
                    models, processor, device) -> list:
-    """이미지 배치를 한 번에 GPU 추론. [(label, meme_prob), ...] 반환."""
+    """Run batched GPU inference and return [(label, meme_prob), ...]."""
     texts = [t.strip() or DEFAULT_OCR for t in ocr_texts]
     dtype = torch.bfloat16 if device == 'cuda' else torch.float32
-    aug   = TTA_AUGS[0]   # TTA 비활성화 상태이므로 기본 resize만
+    aug   = TTA_AUGS[0]   # TTA is disabled, so use the basic resize transform.
 
     all_probs = []
     for model in models:
@@ -891,7 +896,7 @@ def classify_batch(pil_imgs: list, ocr_texts: list,
 
 
 # ════════════════════════════════════════════════════════════════
-#  날짜 범위 파싱
+#  Date range parsing
 # ════════════════════════════════════════════════════════════════
 
 def parse_date_range(args) -> list[date]:
@@ -913,11 +918,11 @@ def parse_date_range(args) -> list[date]:
             dates.append(d)
             d += timedelta(days=1)
         return dates
-    raise ValueError("날짜 지정 필요: --date / --month / --start + --end")
+    raise ValueError("Date required: --date / --month / --start + --end")
 
 
 # ════════════════════════════════════════════════════════════════
-#  미리보기
+#  Preview
 # ════════════════════════════════════════════════════════════════
 
 def run_preview(dates: list[date], n_per_day: int = 10):
@@ -966,7 +971,7 @@ def run_preview(dates: list[date], n_per_day: int = 10):
 
 
 # ════════════════════════════════════════════════════════════════
-#  SIGALRM 기반 타임아웃 (Linux 메인 스레드 전용)
+#  SIGALRM-based timeout (Linux main thread only)
 # ════════════════════════════════════════════════════════════════
 
 import signal as _signal
@@ -976,11 +981,11 @@ class _CtxTimeout(Exception):
 
 def _run_with_timeout(fn, *args, timeout: int = 10, **kwargs):
     """
-    fn(*args, **kwargs)를 실행하되, timeout 초 초과 시 None 반환.
-    SIGALRM 사용 → Linux 메인 스레드에서만 동작.
-    ThreadPoolExecutor를 매번 생성하는 방식 대비:
-      - 스레드 누수 없음
-      - ArchiveManager._cache 동시 접근 없음
+    Run fn(*args, **kwargs) and return None if it exceeds timeout seconds.
+    Uses SIGALRM, so it works only on the Linux main thread.
+    Compared with creating a ThreadPoolExecutor each time, this avoids:
+      - thread leaks
+      - concurrent access to ArchiveManager._cache
     """
     def _handler(signum, frame):
         raise _CtxTimeout()
@@ -1001,7 +1006,7 @@ def _run_with_timeout(fn, *args, timeout: int = 10, **kwargs):
 
 
 # ════════════════════════════════════════════════════════════════
-#  전체 실행
+#  Full run
 # ════════════════════════════════════════════════════════════════
 
 def run_full(dates: list[date], monthly_quota: int = 6250):
@@ -1021,18 +1026,18 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
     processor  = CLIPProcessor.from_pretrained(CONFIG['clip_name'])
     models     = load_models(CONFIG['model_dir'], CONFIG['clip_name'],
                               device, CONFIG['single_fold'])
-    ocr_reader = None  # OCR 제거 (속도 향상), CLIP 이미지 분류만 사용
+    ocr_reader = None  # OCR disabled for speed; use CLIP image inference only.
 
     mgr = ArchiveManager(CONFIG['archive_base'],
                          CONFIG['archive_cache_size'],
                          CONFIG['lookup_max_days_back'])
 
-    # 전체 통계
+    # Overall statistics.
     all_stats = []
     total     = {'image_replies': 0, 'meme': 0, 'not_meme': 0,
                  'dl_fail': 0, 'error': 0, 'orig_imgs': 0}
 
-    # 날짜를 월별로 그룹핑 후 각 월 내에서 랜덤 셔플
+    # Group dates by month, then randomly shuffle days within each month.
     from itertools import groupby
     months_shuffled = []
     for _, group in groupby(dates, key=lambda d: (d.year, d.month)):
@@ -1042,7 +1047,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
     dates = months_shuffled
 
     def _count_existing_month(year: int, month: int) -> int:
-        """해당 월의 기존 수집 밈 수 (index_YYYY-MM-DD.jsonl 줄 수 합산)"""
+        """Count existing collected memes for a month from index_YYYY-MM-DD.jsonl files."""
         count = 0
         for idx_f in sorted(output_dir.glob(f'index_{year}-{month:02d}-*.jsonl')):
             try:
@@ -1051,7 +1056,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                 pass
         return count
 
-    # 월별 쿼터 추적
+    # Track monthly quotas.
     current_month     = None
     month_meme_count  = 0
 
@@ -1059,37 +1064,37 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
         d_str     = d.strftime('%Y-%m-%d')
         month_key = (d.year, d.month)
 
-        # 월이 바뀌면 카운터 리셋 + 기존 수집량 복원 (재실행 대응)
+        # Reset counters and restore existing counts when the month changes.
         if month_key != current_month:
             if current_month is not None:
-                print(f"\n  ── {current_month[0]}-{current_month[1]:02d} 월 완료: "
-                      f"밈 {month_meme_count}개 수집 ──")
+                print(f"\n  -- {current_month[0]}-{current_month[1]:02d} complete: "
+                      f"{month_meme_count} memes collected --")
                 sys.stdout.flush()
-                # 월별 index 파일 병합 저장 (크래시 대비)
+                # Merge and save monthly index files for crash recovery.
                 _ym = f"{current_month[0]}-{current_month[1]:02d}"
                 _month_idx = output_dir / f'meme_index_{_ym}.jsonl'
                 with open(_month_idx, 'w', encoding='utf-8') as _mf:
                     for _df in sorted(output_dir.glob(f'index_{_ym}-*.jsonl')):
                         _mf.write(_df.read_text('utf-8'))
                 _cnt = sum(1 for ln in _month_idx.read_text('utf-8').splitlines() if ln.strip())
-                print(f"  [월별저장] {_month_idx.name}  ({_cnt}개)")
+                print(f"  [monthly-save] {_month_idx.name}  ({_cnt} records)")
                 sys.stdout.flush()
             current_month    = month_key
             month_meme_count = _count_existing_month(month_key[0], month_key[1])
             if month_meme_count > 0:
-                print(f"  [resume] {month_key[0]}-{month_key[1]:02d} 기존 수집량 복원: {month_meme_count}개")
+                print(f"  [resume] {month_key[0]}-{month_key[1]:02d} restored existing count: {month_meme_count}")
                 sys.stdout.flush()
-            print(f"  ▶ {month_key[0]}-{month_key[1]:02d} 월 시작")
+            print(f"  > Starting {month_key[0]}-{month_key[1]:02d}")
             sys.stdout.flush()
 
-        # 이미 이번 달 쿼터 충족 → 스킵
+        # Skip once this month's quota has already been met.
         if monthly_quota and month_meme_count >= monthly_quota:
             all_stats.append({'date': d_str, 'skipped': True, 'reason': 'monthly_quota_met'})
             continue
 
         print(f"\n{'─'*55}")
         print(f"  Processing {d_str} ...  "
-              f"(이번 달 {month_meme_count}/{monthly_quota}개 수집됨)")
+              f"({month_meme_count}/{monthly_quota} collected this month)")
 
         day_idx = load_day(d, CONFIG['archive_base'])
         if not day_idx:
@@ -1098,13 +1103,13 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
 
         ir = day_idx['image_replies']
 
-        # 하루치 데이터 랜덤 셔플 (균등 샘플링)
+        # Shuffle one day's data for more even sampling.
         random.shuffle(ir)
 
-        # 하루 최대 처리 수 제한 (CDN rate-limit / 메모리 완화)
+        # Limit daily processing to reduce CDN rate-limit and memory pressure.
         daily_cap = CONFIG.get('daily_sample_size')
         if daily_cap and len(ir) > daily_cap:
-            print(f"  [sample] {daily_cap:,}/{len(ir):,}개 샘플링 (daily_sample_size)")
+            print(f"  [sample] sampled {daily_cap:,}/{len(ir):,} rows (daily_sample_size)")
             ir = ir[:daily_cap]
 
         day_stats = {
@@ -1118,15 +1123,15 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
         }
         total['image_replies'] += len(ir)
 
-        # 날짜별 인덱스 파일 (경량)
+        # Lightweight daily index file.
         day_index_path = output_dir / f'index_{d_str}.jsonl'
         day_index_f    = open(day_index_path, 'w', encoding='utf-8')
 
         quota_reached = False
         by_uri = day_idx['by_uri']
 
-        BATCH_SIZE = 32   # GPU 배치 크기
-        PREFETCH   = 32   # 동시 다운로드 수
+        BATCH_SIZE = 32   # GPU batch size
+        PREFETCH   = 32   # Concurrent downloads
 
         dl_executor = ThreadPoolExecutor(max_workers=PREFETCH)
 
@@ -1148,13 +1153,13 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
         pbar = tqdm(total=len(ir), desc=d_str, leave=False)
 
         while pending and not quota_reached:
-            # ── 배치 수집 ──────────────────────────────────────
+            # -- collect a batch -------------------------------------
             batch_uris  = []
             batch_saves = []
 
             while len(batch_uris) < BATCH_SIZE and pending:
                 if monthly_quota and month_meme_count + len(batch_uris) >= monthly_quota:
-                    quota_reached = True   # ← 여기서 break하면 batch_uris가 비어 continue로 외부 while 재진입 → 무한루프 방지
+                    quota_reached = True   # Prevent an empty batch from causing an outer-loop spin.
                     break
 
                 uri, future = pending.popleft()
@@ -1167,7 +1172,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                     pass
 
                 try:
-                    meme_saves = future.result(timeout=10)  # 10초 초과 시 skip
+                    meme_saves = future.result(timeout=10)  # Skip if download exceeds 10 seconds.
                     if not meme_saves:
                         day_stats['dl_fail_count'] += 1
                         total['dl_fail'] += 1
@@ -1182,7 +1187,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
             if not batch_uris:
                 continue
 
-            # ── 이미지 로드 ────────────────────────────────────
+            # -- load images -----------------------------------------
             loaded = []   # (uri, meme_saves, pil_img)
             for uri, meme_saves in zip(batch_uris, batch_saves):
                 try:
@@ -1198,8 +1203,8 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
             if not loaded:
                 continue
 
-            # ── 배치 GPU 분류 ──────────────────────────────────
-            tqdm.write(f"  [batch] {len(loaded)}개 → GPU 배치 분류 시작")
+            # -- batched GPU classification --------------------------
+            tqdm.write(f"  [batch] starting GPU classification for {len(loaded)} images")
             try:
                 pil_imgs = [x[2] for x in loaded]
                 results  = classify_batch(pil_imgs, [DEFAULT_OCR]*len(pil_imgs),
@@ -1214,9 +1219,9 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                         except Exception: pass
                 continue
 
-            tqdm.write(f"  [batch] 분류 완료")
+            tqdm.write(f"  [batch] classification complete")
 
-            # ── 결과 처리 ──────────────────────────────────────
+            # -- process results -------------------------------------
             processed_in_batch = 0
             for (uri, meme_saves, pil_img), (label, meme_prob) in zip(loaded, results):
                 if monthly_quota and month_meme_count >= monthly_quota:
@@ -1239,17 +1244,17 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                         total['not_meme'] += 1
                         continue
 
-                    # ── 밈 판정 ────────────────────────────────
-                    tqdm.write(f"  [MEME] {post['uid']} prob={meme_prob:.4f} 저장 중...")
+                    # Meme prediction.
+                    tqdm.write(f"  [MEME] {post['uid']} prob={meme_prob:.4f} saving...")
                     day_stats['meme_count'] += 1
                     total['meme'] += 1
                     month_meme_count += 1
 
-                    # build_context: cache_only=True → 디스크 I/O 없이 즉시 반환
+                    # build_context(cache_only=True) returns immediately without disk I/O.
                     try:
                         ctx = build_context(uri, day_idx, mgr, d, cache_only=True)
                     except Exception as e:
-                        tqdm.write(f"  [ctx] ERROR → 컨텍스트 없이 저장: {e}")
+                        tqdm.write(f"  [ctx] ERROR; saving without context: {e}")
                         ctx = {
                             'root_post': None, 'depth': 0,
                             'structure_label': 'unknown',
@@ -1260,7 +1265,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                         }
                     ctx['_meme_post'] = post
 
-                    orig_saves = []  # 원본 이미지는 download_images.py로 별도 다운로드
+                    orig_saves = []  # Original-post images are downloaded separately.
 
                     record = build_record(ctx, meme_prob, meme_saves, orig_saves, d_str)
 
@@ -1283,7 +1288,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                         'original_post_uri':        post['root_uri'],
                         'original_post_in_archive': ctx['root_post'] is not None,
                     }, ensure_ascii=False) + '\n')
-                    tqdm.write(f"  [MEME] 저장 완료 (이번 달 {month_meme_count}/{monthly_quota})")
+                    tqdm.write(f"  [MEME] saved (monthly count {month_meme_count}/{monthly_quota})")
 
                 except Exception as e:
                     import traceback
@@ -1297,38 +1302,38 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
                             shutil.rmtree(fp.parent, ignore_errors=True)
                         except Exception: pass
 
-            tqdm.write(f"  [batch] 처리 완료: {processed_in_batch}/{len(loaded)}개")
+            tqdm.write(f"  [batch] processed {processed_in_batch}/{len(loaded)} images")
 
-            # for 루프가 자연 종료됐을 때도 쿼터 초과 여부 확인 (마지막 밈이 루프 끝에서 처리된 경우)
+            # Check quota after a natural loop exit in case the last item reached the quota.
             if monthly_quota and month_meme_count >= monthly_quota:
                 quota_reached = True
 
-        # ── 날짜 통계 먼저 출력 (cleanup hang 전에 확보) ─────────────
+        # Print daily stats before cleanup, in case cleanup hangs.
         img_cnt  = day_stats['image_reply_count']
         meme_cnt = day_stats['meme_count']
         day_stats['meme_ratio'] = round(meme_cnt / img_cnt, 4) if img_cnt else 0
         all_stats.append(day_stats)
-        quota_msg = '  [월 쿼터 달성, 다음 날 스킵]' if quota_reached else ''
+        quota_msg = '  [monthly quota reached; skipping remaining days]' if quota_reached else ''
         tqdm.write(f"\n  {d_str}: image_replies={img_cnt}  meme={meme_cnt}  "
                    f"not_meme={day_stats['not_meme_count']}  "
                    f"ratio={day_stats['meme_ratio']:.1%}"
-                   f"  (누적 {month_meme_count}/{monthly_quota}){quota_msg}")
+                   f"  (monthly total {month_meme_count}/{monthly_quota}){quota_msg}")
 
         # ── cleanup ────────────────────────────────────────────────
-        # quota 도달 시 남은 pending futures 취소
+        # Cancel remaining pending futures when quota is reached.
         if quota_reached:
             for _, fut in list(pending):
                 fut.cancel()
             pending.clear()
 
-        # pbar.close() 대신 disable로 교체:
-        # leave=False + 미완료 bar에서 close()가 stderr flush 중 blocking 발생 확인됨
+        # Use disable instead of pbar.close(); with leave=False and an incomplete
+        # bar, close() was observed to block on stderr flushing.
         pbar.disable = True
 
         dl_executor.shutdown(wait=False, cancel_futures=True)
         day_index_f.close()
 
-    # 전체 통합 JSON
+    # Combined JSON output.
     all_records = []
     for fp in sorted(records_dir.glob('*.json')):
         try:
@@ -1339,7 +1344,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
         json.dumps(all_records, ensure_ascii=False, indent=2, default=str),
         encoding='utf-8')
 
-    # 마지막 월 index 저장 (루프 종료 후 마지막 월은 월 경계가 없어서 별도 처리)
+    # Save the last monthly index after the loop because no month boundary follows it.
     if current_month is not None:
         _ym = f"{current_month[0]}-{current_month[1]:02d}"
         _month_idx = output_dir / f'meme_index_{_ym}.jsonl'
@@ -1347,15 +1352,15 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
             for _df in sorted(output_dir.glob(f'index_{_ym}-*.jsonl')):
                 _mf.write(_df.read_text('utf-8'))
         _cnt = sum(1 for ln in _month_idx.read_text('utf-8').splitlines() if ln.strip())
-        print(f"  [월별저장] {_month_idx.name}  ({_cnt}개)")
+        print(f"  [monthly-save] {_month_idx.name}  ({_cnt} records)")
 
-    # 전체 인덱스 병합 (날짜별 jsonl → meme_index.jsonl)
-    # glob 패턴을 날짜 형식으로 한정해 meme_index_YYYY-MM.jsonl 이 섞이지 않도록 함
+    # Merge daily JSONL indexes into meme_index.jsonl.
+    # Restrict the glob to date-formatted filenames to avoid meme_index_YYYY-MM.jsonl.
     with open(output_dir / 'meme_index.jsonl', 'w', encoding='utf-8') as out_f:
         for day_file in sorted(output_dir.glob('index_????-??-??.jsonl')):
             out_f.write(day_file.read_text('utf-8'))
 
-    # 통계 저장
+    # Save statistics.
     total_img = total['image_replies']
     summary = {
         'date_range':          f"{dates[0]} ~ {dates[-1]}",
@@ -1376,7 +1381,7 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
         json.dumps(summary, ensure_ascii=False, indent=2, default=str),
         encoding='utf-8')
 
-    # 최종 요약 출력
+    # Final summary.
     print(f"\n{'='*60}")
     print(f"  DONE  ({dates[0]} ~ {dates[-1]})")
     print(f"  Total image replies:  {total_img:,}")
@@ -1390,15 +1395,15 @@ def run_full(dates: list[date], monthly_quota: int = 6250):
     print(f"  ├─ meme_images/{{uid}}/{{cid}}.jpg")
     print(f"  ├─ original_post_images/{{uid}}/{{cid}}.jpg")
     print(f"  ├─ records/{{uid}}.json")
-    print(f"  ├─ index_YYYY-MM-DD.jsonl  (날짜별)")
-    print(f"  ├─ meme_index.jsonl        (전체 병합)")
+    print(f"  ├─ index_YYYY-MM-DD.jsonl  (daily)")
+    print(f"  ├─ meme_index.jsonl        (merged)")
     print(f"  ├─ all_memes.json")
-    print(f"  └─ stats.json              ← 날짜별/총계 통계")
+    print(f"  └─ stats.json              <- daily and aggregate statistics")
     print(f"{'='*60}")
 
 
 # ════════════════════════════════════════════════════════════════
-#  진입점
+#  Entry point
 # ════════════════════════════════════════════════════════════════
 
 def main():
@@ -1407,11 +1412,11 @@ def main():
     mode.add_argument('--preview', action='store_true')
     mode.add_argument('--run',     action='store_true')
 
-    # 날짜 지정 (셋 중 하나)
-    p.add_argument('--date',  default=None, help='단일 날짜  e.g. 2023-09-01')
-    p.add_argument('--month', default=None, help='월 전체    e.g. 2023-09')
-    p.add_argument('--start', default=None, help='시작 날짜  e.g. 2023-09-01')
-    p.add_argument('--end',   default=None, help='끝 날짜    e.g. 2023-09-30')
+    # Date selection (choose one of these forms).
+    p.add_argument('--date',  default=None, help='Single date, e.g. 2023-09-01')
+    p.add_argument('--month', default=None, help='Full month, e.g. 2023-09')
+    p.add_argument('--start', default=None, help='Start date, e.g. 2023-09-01')
+    p.add_argument('--end',   default=None, help='End date, e.g. 2023-09-30')
 
     p.add_argument('--archive-base', default=None)
     p.add_argument('--model-dir',    default=None)
@@ -1421,15 +1426,15 @@ def main():
     p.add_argument('--threshold',    type=float, default=None)
     p.add_argument('--preview-n',    type=int, default=10)
     p.add_argument('--lang',         nargs='+', default=None,
-                   help='언어 필터 (기본: en). 예: --lang en  또는  --lang en ko  또는 --lang all (필터 해제)')
+                   help='Language filter (default: en). Examples: --lang en, --lang en ko, --lang all')
     p.add_argument('--lang-strict',  action='store_true',
-                   help='langs=null인 포스트도 제외')
+                   help='Exclude posts with langs=null or empty langs.')
     p.add_argument('--monthly-quota', type=int, default=5000,
-                   help='월별 밈 수집 목표 (기본: 5000). 0이면 무제한.')
+                   help='Monthly meme collection target (default: 5000). Use 0 for unlimited.')
     p.add_argument('--daily-sample', type=int, default=None,
-                   help='하루 최대 처리 image reply 수 (기본: 전체). 예: --daily-sample 3000')
+                   help='Maximum image replies to process per day. Example: --daily-sample 3000')
     p.add_argument('--lookup-days', type=int, default=None,
-                   help='root post 소급 검색 일수 (기본: 0 = TID 추정만). 예: --lookup-days 3')
+                   help='Prior days to search for root posts (default: 0 = TID estimate only). Example: --lookup-days 3')
     args = p.parse_args()
 
     if args.archive_base: CONFIG['archive_base']    = args.archive_base
