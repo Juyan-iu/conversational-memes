@@ -217,8 +217,9 @@ during the original firehose collection.
 ### Release Hydration Run Summary
 
 The following summary comes from the completed release hydration run reported in
-`hydration_report.json`. The run started on 2026-05-19 20:39:53 UTC and finished
-on 2026-05-20 06:37:12 UTC, for a total runtime of about 9 hours and 57 minutes.
+`hydration_report.json`. This run reflects public API and CDN availability as of
+2026-05-20. It started on 2026-05-19 20:39:53 UTC and finished on 2026-05-20
+06:37:12 UTC, for a total runtime of about 9 hours and 57 minutes.
 
 | Metric | Count | Rate |
 | --- | ---: | ---: |
