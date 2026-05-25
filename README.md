@@ -1,6 +1,6 @@
-# \textsc{MemeConv}
+# **MemeConv**
 
-Code release for **MEMECONV: A Dataset and Benchmark for Meme Literacy in the Wild Online Conversations**.
+Code release for **MemeConv: A Dataset and Benchmark for Meme Literacy in the Wild Online Conversations**.
 
 Folders `01_collection/` through `07_analysis/` are for reproducing the paper's pipeline and results. The `download/` folder is for accessing the released dataset and benchmark artifacts without re-running the full pipeline.
 
