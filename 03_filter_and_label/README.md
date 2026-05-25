@@ -1,70 +1,74 @@
-# Meme Discourse Labeling Pipeline
+# 03_filter_and_label - Candidate Validation and Labeling
 
-Automatic discourse function (Speech Function) and stance labeling pipeline for Bluesky post–meme reply conversational data.
+This folder contains the validation, meme-level labeling, cleanup, and refill
+pipeline used after candidate meme replies are collected in
+[`../01_collection`](../01_collection/README.md).
 
-> The dataset will be released separately.
+The public reproducibility workflow keeps the scripts needed to rebuild the
+curated candidate pool. Legacy annotation resources from earlier experiments
+are intentionally omitted because those labels are not part of the paper's
+released task.
 
----
+## What This Stage Does
 
-## File Structure
+`label_pipeline.py` reads candidate records from stage 01, validates that each
+candidate image is a meme, downloads/cache media needed for annotation, and
+writes one JSONL row per accepted record. For each accepted candidate, it adds
+the meme validation result, downloaded image paths, stance attributes, and a
+visual description.
 
-```
+`postprocess.py` checks the labeled output, removes clear non-English or
+mass-mention records when requested, and writes `shortage.json` for months that
+fall below the target count.
+
+`refill_pipeline.py` reads `shortage.json`, samples additional candidates from
+the original collection folders, and appends replacement records to the same
+output directory using the same validation and labeling functions.
+
+## Files
+
+```text
 03_filter_and_label/
-├── label_pipeline.py               # Main labeling pipeline
-├── postprocess.py                  # Post-processing (non-English removal, shortage generation)
-├── refill_pipeline.py              # Monthly shortage refill pipeline
-├── create_tree.py                  # Discourse function tree builder
-├── three_levels.tsv                # 3-level taxonomy (for parent replies)
-├── two_levels_no_sustain.tsv       # 2-level taxonomy (for meme replies, Sustain excluded)
-├── three_levels_tree.json          # 3-level tree (for parent replies)
-├── two_levels_no_sustain_tree.json # 2-level tree (for meme replies)
-├── description_three_levels.txt
-├── description_two_levels.txt
+├── label_pipeline.py                  # Main validation and labeling pipeline
+├── postprocess.py                     # Language/mass-mention cleanup and shortage report
+├── refill_pipeline.py                 # Monthly shortage refill pipeline
 ├── requirements.txt
-├── .env.example
-├── .gitignore
-└── prompts/
-    ├── prompt_free_form_non_binary.py
-    ├── prompt_add_label.py
-    ├── prompt_scorer.py
-    └── prompt_annotate_dialogs.py
+└── README.md
 ```
 
----
+## Input
 
-## Labeling Design
+By default, `label_pipeline.py` reads candidate records from:
 
-### Input Data Structure
-
+```python
+CONFIG = {
+    "input_dirs": [
+        "../01_collection/meme_dataset_24_06",
+        "../01_collection/meme_dataset_25_02",
+        "../01_collection/meme_dataset",
+    ],
+    "output_dir": "./labeled_dataset",
+}
 ```
-original_post       <- Source post (not labeled)
-└── parent_reply    <- Parent reply, if any (3-level labeling)
-    └── meme_reply  <- Meme reply (2-level labeling + Stance + Visual)
+
+You can override the input folders with `--input`.
+
+Expected input layout:
+
+```text
+meme_dataset_*/
+├── records/
+│   └── <uid>.json
+└── index_YYYY-MM-DD.jsonl
 ```
 
-### Meme Reply Labels (2-level, Sustain excluded)
+## Requirements
 
-Discourse Function:
-- `Open.Attend` / `Open.Command` / `Open.Demand` / `Open.Give`
-- `React.Rejoinder` / `React.Respond`
+- Python 3.10+
+- OpenAI API key
+- Candidate records from stage 01
 
-Stance (independent binary Yes/No per label):
-- `Sarcastic` — ironic or mocking tone
-- `Humorous` — comedic or playful tone
-- `Offensive` — aggressive or harmful content
-
-Visual Description:
-- One-sentence description of the meme image's visual elements, excluding caption text
-
-### Parent Reply Labels (3-level)
-
-- `Open.*` / `React.Rejoinder.*` / `React.Respond.*` / `Sustain.*`
-
----
-
-## Usage
-
-### Step 1: Environment Setup
+Install dependencies:
 
 ```bash
 python -m venv label_env
@@ -72,140 +76,125 @@ source label_env/bin/activate
 pip install -r requirements.txt
 ```
 
-### Step 2: API Key Configuration
+Set your API key:
 
 ```bash
-cp .env.example .env
-# Fill in your OpenAI API key in .env
+export OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-`.env`:
-```
-OPENAI_API_KEY=your_openai_api_key_here
-```
+## Run
 
-### Step 3: (Optional) Rebuild Trees
-
-Tree files are already included; rebuilding is only necessary if the taxonomy is modified.
+Run the monthly balanced labeling job:
 
 ```bash
-# 3-level tree for parent replies
-python create_tree.py \
-  -c free_form_non_binary \
-  -t three_levels.tsv \
-  -d description_three_levels.txt \
-  -o three_levels_tree.json
-
-# 2-level tree for meme replies (Sustain excluded)
-python create_tree.py \
-  -c free_form_non_binary \
-  -t two_levels_no_sustain.tsv \
-  -d description_two_levels.txt \
-  -o two_levels_no_sustain_tree.json
-```
-
-### Step 4: Run Labeling
-
-```bash
-# Monthly balanced collection (target: 20,400 validated memes = 850/month x 24 months)
-nohup python -u label_pipeline.py \
+python label_pipeline.py \
   --monthly-total 20400 \
-  --output ./labeled_final \
-  > ./pipeline.log 2>&1 &
-
-echo $! > ./pipeline.pid
-tail -f ./pipeline.log
+  --output ./labeled_final
 ```
 
-### Step 5: Post-processing
+Run a small sample:
 
 ```bash
-# Check status without modifying files
+python label_pipeline.py \
+  --sample 50 \
+  --output ./labeled_sample
+```
+
+Useful options:
+
+```text
+--input DIR [DIR ...]       Override candidate dataset folders.
+--monthly-total N           Target total accepted records across available months.
+--sample N                  Process a random sample when not using --all or --monthly-total.
+--all                       Process all loaded records.
+--model MODEL               Override main and visual model together.
+--model-visual MODEL        Override only the visual model.
+--uid-file PATH             Process only UIDs listed in a text file.
+--save-uids PATH            Save sampled UIDs for reproducible reruns.
+```
+
+## Postprocess
+
+Check status without modifying files:
+
+```bash
 python postprocess.py \
   --input ./labeled_final/labeled_memes.jsonl
+```
 
-# Remove non-English records, replace original file, generate shortage.json
+Create a cleaned file and `shortage.json`:
+
+```bash
+python postprocess.py \
+  --input ./labeled_final/labeled_memes.jsonl \
+  --clean
+```
+
+Replace the original JSONL with the cleaned JSONL:
+
+```bash
 python postprocess.py \
   --input ./labeled_final/labeled_memes.jsonl \
   --clean --replace
 ```
 
-### Step 6: Refill Monthly Shortages
+## Refill
+
+Use `refill_pipeline.py` after `postprocess.py` creates `shortage.json`:
 
 ```bash
-nohup python -u refill_pipeline.py \
+python refill_pipeline.py \
   --shortage ./labeled_final/shortage.json \
-  --output ./labeled_final \
-  > ./refill.log 2>&1 &
-
-echo $! > ./refill.pid
-tail -f ./refill.log
+  --output ./labeled_final
 ```
 
----
+## Output
 
-## Output Structure
-
-```
+```text
 labeled_final/
-├── labeled_memes.jsonl     # Full labeling results (JSONL)
-├── shortage.json           # Per-month shortage info
-└── records/
-    └── {uid}.json          # Individual records
+├── labeled_memes.jsonl
+├── shortage.json
+├── records/
+│   └── <uid>.json
+└── images/
 ```
 
-Each record:
+Each accepted record preserves the original stage-01 fields and adds curation
+metadata such as:
+
 ```json
 {
   "uid": "...",
-  "original_post": { "text": "...", ... },
-  "parent_reply": { "text": "...", ... },
-  "meme_reply": { "text": "...", "images": [...], ... },
   "meme_validation": {
     "passed": true,
     "valid_ratio": 1.0,
-    "validations": [{ "template_name": "...", ... }]
+    "validations": []
   },
-  "discourse_labels": {
-    "meme_reply": {
-      "discourse_function": "React.Respond",
-      "stance": {
-        "sarcastic": false,
-        "humorous": true,
-        "offensive": false
-      },
-      "visual": {
-        "visual_description": "..."
-      }
+  "downloaded_images": {
+    "meme_reply": []
+  },
+  "meme_annotation": {
+    "stance_labels": {
+      "sarcastic": false,
+      "humorous": true,
+      "offensive": false
     },
-    "parent_reply": {
-      "discourse_function": "React.Rejoinder.Support"
-    }
+    "visual_description": "..."
   },
+  "stance_labels": {
+    "sarcastic": false,
+    "humorous": true,
+    "offensive": false
+  },
+  "visual_description": "...",
   "labeled_at": "2025-..."
 }
 ```
 
----
+## Notes
 
-## Recommended .gitignore Entries
-
-```
-label_env/
-.env
-labeled_final/
-labeled_test/
-__pycache__/
-*.log
-*.pid
-monthly_checks/
-```
-
----
-
-## References
-
-- Petukhova & Kochmar (2025). A Fully Automated Pipeline for Conversational Discourse Annotation. ACL 2025.
-- Calderon et al. (2025). The Alternative Annotator Test for LLM-as-a-Judge. ACL 2025.
-- Sharma et al. (2020). SemEval-2020 Task 8: Memotion Analysis. SemEval 2020.
-- Hwang & Shwartz (2023). MemeCap. EMNLP 2023.
+- `postprocess.py` uses conservative language filtering: short text, slang, and
+  emoji-heavy posts are usually kept, while clear non-English records and
+  mass-mention posts are removed.
+- `refill_pipeline.py` reuses the same validation and labeling functions as
+  `label_pipeline.py`.
