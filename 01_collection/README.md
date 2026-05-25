@@ -1,22 +1,13 @@
 # 01_collection - Meme Reply Collection
 
-This folder contains the original archive-based collection pipeline used to
-identify meme replies in Bluesky firehose archives and construct conversation
-context records.
-
-For public reproducibility, there are two supported paths:
-
-1. Re-run this folder against local Bluesky firehose archives and the released
-   MemeTector checkpoint.
-2. Use the released UID manifest with the lightweight hydration scripts in
-   [`../download`](../download/README.md). This reproduces the same benchmark
-   records by UID without re-running the classifier.
+This folder contains the archive-based collection pipeline used to reproduce the
+candidate meme-reply collection stage from local Bluesky firehose archives.
 
 ## What This Stage Does
 
-`meme_pipeline.py` scans daily firehose archive files, keeps English image
-replies, classifies each image with MemeTector v4, and writes one JSON record per
-detected meme reply.
+`meme_pipeline.py` scans daily Bluesky firehose archive files, keeps English
+single-image replies, classifies each image with MemeTector v4, and writes one
+JSON record per detected meme reply.
 
 Each output record is keyed by the meme reply UID:
 
@@ -24,39 +15,35 @@ Each output record is keyed by the meme reply UID:
 bsky_<last_14_chars_of_did>_<rkey>
 ```
 
-The UID is stable inside this project, but it is not reversible by itself because
-it stores only the DID suffix. Any public reproducibility file should therefore
-store both `uid` and the full `at://...` URI.
-
-## Directory Layout
+## Files
 
 ```text
 01_collection/
-├── meme_pipeline.py              # Archive scan, image download, CLIP inference
-├── export_uid_manifest.py        # Export public UID/URI manifest from records
+├── meme_pipeline.py      # Archive scan, image download, CLIP inference
 ├── requirements.txt
-├── meme_dataset/                 # Collection run output; records are not tracked
-├── meme_dataset_24_06/
-└── meme_dataset_25_02/
+└── README.md
 ```
 
-Each dataset folder follows this layout:
+Generated outputs are written under the configured `output_dir` and are not
+tracked in git:
 
 ```text
-meme_dataset_*/
+meme_dataset/
+├── meme_images/
+│   └── <uid>/<cid>.jpg
+├── original_post_images/
 ├── records/
 │   └── <uid>.json
-├── images/
+├── index_YYYY-MM-DD.jsonl
+├── meme_index.jsonl
+├── all_memes.json
 └── stats.json
 ```
 
 ## Record Schema
 
-The final record used downstream is a JSON object with the following main
-fields. `meme_pipeline.py` creates the meme reply, root post, parent reply, and
-comparison fields from the archive. If context enrichment has been run, the same
-record may also include `quoted_post`; the public hydration script in
-`../download` reconstructs these fields from URI references.
+Each saved record contains the detected meme reply, available conversation
+context, the selected text comparison reply, and collection metadata:
 
 ```json
 {
@@ -64,6 +51,7 @@ record may also include `quoted_post`; the public hydration script in
   "uri": "at://did:.../app.bsky.feed.post/...",
   "meme_prob": 0.91,
   "is_meme": true,
+  "threshold": 0.5,
   "meme_reply": {
     "uid": "...",
     "uri": "...",
@@ -77,33 +65,38 @@ record may also include `quoted_post`; the public hydration script in
     "text": "...",
     "images": []
   },
-  "parent_reply": {
-    "uri": "...",
-    "text": "...",
-    "images": []
-  },
-  "quoted_post": null,
+  "parent_reply": null,
   "thread_structure": {
     "depth": 1,
     "label": "reply"
   },
+  "best_reply_before_meme": null,
+  "closest_text_reply": null,
+  "closest_sibling_text_reply": null,
   "comparison_reply": {
     "uri": "...",
     "selected_by": "timely_structural"
-  }
+  },
+  "source_file": "2024-06-01.json.gz",
+  "process_date": "2024-06-01"
 }
 ```
 
-`parent_reply` and `quoted_post` depend on whether the corresponding public
-archive/API content is still available. The published dataset statistics should
-report structural reply depth separately from context availability.
+Context fields may be `null` when the corresponding post is not available in the
+local archive window used for lookup.
 
 ## Requirements
 
 - Python 3.12+
-- CUDA-capable GPU for full archive collection
+- CUDA-capable GPU for full-scale collection
 - Bluesky firehose archives in daily `.json.gz` files
-- MemeTector v4 checkpoints from [`../02_meme_classification`](../02_meme_classification/README.md)
+- MemeTector v4 checkpoints prepared in
+  [`../02_meme_classification`](../02_meme_classification/README.md)
+
+Before running this collection stage, go to `../02_meme_classification` and
+either train the MemeTector classifier or download the released checkpoints.
+Then set `--model-dir` to the directory containing the fold checkpoints
+(`fold1_best.pth` through `fold5_best.pth`).
 
 Install dependencies:
 
@@ -114,9 +107,10 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 ```
 
-## Configure Collection
+## Configure
 
-Edit `CONFIG` at the top of `meme_pipeline.py`:
+You can edit `CONFIG` at the top of `meme_pipeline.py` or override common paths
+and parameters from the command line.
 
 ```python
 CONFIG = {
@@ -141,94 +135,31 @@ Expected archive layout:
     └── ...
 ```
 
-## Run Collection
+## Run
 
 ```bash
-# Preview one day without writing records
-python meme_pipeline.py --preview --date 2024-06-01
-
-# Run one day
-python meme_pipeline.py --run --date 2024-06-01
-
-# Run one month
-python meme_pipeline.py --run --month 2024-06
-
-# Run a date range
-python meme_pipeline.py --run --start 2024-06-01 --end 2025-02-28
+python meme_pipeline.py --run --date 2024-06-01 \
+  --archive-base /path/to/firehose_archives \
+  --model-dir /path/to/memetector_v4/checkpoints \
+  --output-dir ./meme_dataset
 ```
 
-## Export the Public UID Manifest
+Useful options:
 
-After collection and any context patching are complete, export the manifest used
-by the public download pipeline. Exporting from all collection record folders
-creates the upstream candidate-pool manifest. In the release described here,
-this pool contains 119,848 candidate meme replies before downstream validation,
-labeling, and benchmark mapping.
-
-```bash
-python export_uid_manifest.py \
-  --records-dir meme_dataset_24_06/records \
-  --records-dir meme_dataset_25_02/records \
-  --records-dir meme_dataset/records \
-  --out ../download/data/meme_reply_uid_manifest.jsonl
+```text
+--preview          Preview archive parsing without writing records.
+--month YYYY-MM    Run a full month instead of one day.
+--start / --end    Run a date range instead of one day.
+--monthly-quota N   Stop after N detected memes per month. Use 0 for no quota.
+--daily-sample N    Randomly sample at most N image replies per day.
+--lookup-days N     Search up to N earlier archive days for root/parent context.
+--lang all          Disable the default English-language filter.
+--single-fold N     Use one MemeTector fold instead of the 5-fold ensemble.
 ```
 
-Small sample export:
+## Notes
 
-```bash
-python export_uid_manifest.py \
-  --records-dir meme_dataset_24_06/records \
-  --out ../download/data/sample_uid_manifest.jsonl \
-  --limit 25
-```
-
-The manifest intentionally contains only identifiers and URI pointers. Later
-stages should map classifier metadata, validation labels, benchmark splits, and
-provided distractors back onto records by `uid`.
-
-If you need a manifest for only the final labeled dataset, export from the
-post-filtering JSONL instead:
-
-```bash
-python export_uid_manifest.py \
-  --input ../03_filter_and_label/labeled_final/labeled_memes.jsonl \
-  --out ../download/data/validated_dataset_uid_manifest.jsonl
-```
-
-## Manifest Fields
-
-Each JSONL row contains enough information to hydrate the same public record:
-
-```json
-{
-  "uid": "bsky_<did_suffix>_<rkey>",
-  "uri": "at://did:.../app.bsky.feed.post/...",
-  "meme_reply_uri": "at://did:.../app.bsky.feed.post/...",
-  "root_post_uri": "at://did:.../app.bsky.feed.post/...",
-  "reply_parent_uri": "at://did:.../app.bsky.feed.post/...",
-  "parent_reply_uri": null,
-  "quoted_post_uri": null,
-  "best_reply_before_meme_uri": null,
-  "closest_text_reply_uri": null,
-  "closest_sibling_text_reply_uri": null,
-  "comparison_reply_uri": "at://did:.../app.bsky.feed.post/...",
-  "thread_depth": 1,
-  "thread_label": "reply"
-}
-```
-
-`reply_parent_uri` is the direct AT Protocol parent reference. For first-level
-replies it usually equals `root_post_uri`. `parent_reply_uri` is populated only
-when the direct parent is itself a reply.
-
-## Reproducibility Notes
-
-- Full archive collection is needed only to regenerate meme candidates from
-  scratch. Public users can start from the UID manifest in `../download`.
-- The public API can no longer return deleted or unavailable posts/images. The
-  hydration scripts keep the UID and URI and record failures in a report.
-- Percentages for structural reply depth should use the full record count as the
-  denominator. Parent-content availability should be reported separately among
-  structurally nested replies.
-- Original meme images, root posts, parent replies, and quoted posts are
-  hydrated by URI. Labels and benchmark metadata should be joined later by `uid`.
+- Public post/image availability can change over time, especially for deleted or
+  restricted content.
+- Thread-depth percentages should use the full collected record count as the
+  denominator. Context availability should be reported separately.
