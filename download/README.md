@@ -374,8 +374,6 @@ through Bluesky's public API at hydration time.
 | Benchmark UIDs | 5,000 | 100.0% |
 | Matched manifest rows | 5,000 | 100.0% |
 | Hydrated or already available records | 4,948 | 99.0% |
-| Newly hydrated records | 4,542 | 90.8% |
-| Skipped existing records | 406 | 8.1% |
 | Failed rows | 52 | 1.0% |
 | Images downloaded | 7,483 | - |
 | Image downloads failed | 11 | - |
