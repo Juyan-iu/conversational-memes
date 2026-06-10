@@ -303,6 +303,87 @@ The full hydrated dataset can recover the correct answer image and conversation
 context, but it does not recreate the exact benchmark distractors. For
 comparable evaluation numbers, use the released benchmark download.
 
+### Benchmark UID Hydration
+
+Use `hydrate_benchmark_from_uids.py` when you have the fixed `benchmark_data/`
+directory, benchmark UID list, or `benchmark_summary.jsonl` and want to hydrate
+only those benchmark records from the larger released collection manifest. The
+benchmark input can be the benchmark output directory itself, a plain text list,
+JSONL, JSON, CSV, TSV, or the benchmark summary file as long as each row
+contains a `uid`.
+
+The lightweight benchmark UID list is included in this repository:
+
+```text
+download/data/benchmark_uids.txt
+```
+
+The larger 22,031-row release manifest is distributed separately as
+`labeled_release.jsonl`. Download it from the release link and place it here:
+
+```text
+download/data/labeled_release.jsonl
+```
+
+`labeled_release.jsonl` contains project UIDs, public Bluesky AT URIs, labels,
+validation metadata, and derived visual descriptions. It does not include raw
+Bluesky post text, image files, image URLs, local image paths, user handles, or
+display names.
+
+```bash
+python hydrate_benchmark_from_uids.py \
+  --benchmark-uids data/benchmark_uids.txt \
+  --manifest data/labeled_release.jsonl \
+  --out benchmark_hydrated \
+  --download-images context
+```
+
+The output includes:
+
+```text
+benchmark_hydrated/
+├── benchmark_uid_manifest.jsonl
+├── benchmark_hydration_report.json
+├── records/<uid>.json
+└── images/
+```
+
+The script still requires the full UID/URI manifest. A project UID alone keeps
+only a truncated DID suffix, so it cannot be used directly with the public
+Bluesky API.
+
+This script restores the public-record side of the benchmark. It can recover
+the correct answer image (`A_original.jpg`) and conversation context when the
+original public Bluesky content is still available. The distractor images
+(`B_text_distractor.jpg`, `C_visual_distractor.jpg`, and
+`D_easy_distractor.jpg`) are not redistributed in this repository because they
+are transformed from, or sampled from, public user images. To create a
+functionally equivalent benchmark, rerun the benchmark construction pipeline in
+[`../04_benchmark`](../04_benchmark/README.md). Regenerated distractors may not
+be pixel-identical to the internal evaluation archive.
+
+### Benchmark Hydration Run Summary
+
+The following summary comes from the benchmark UID hydration run over the 5,000
+rows in `data/benchmark_uids.txt`, joined against `data/labeled_release.jsonl`.
+Failed rows are treated as posts that were deleted or otherwise unavailable
+through Bluesky's public API at hydration time.
+
+| Metric | Count | Rate |
+| --- | ---: | ---: |
+| Benchmark UIDs | 5,000 | 100.0% |
+| Matched manifest rows | 5,000 | 100.0% |
+| Hydrated or already available records | 4,948 | 99.0% |
+| Newly hydrated records | 4,542 | 90.8% |
+| Skipped existing records | 406 | 8.1% |
+| Failed rows | 52 | 1.0% |
+| Images downloaded | 7,483 | - |
+| Image downloads failed | 11 | - |
+
+The 52 failed rows returned `HTTP 400` from Bluesky's public
+`getPostThread` endpoint. Image download failures are counted separately from
+row-level hydration failures.
+
 ### Benchmark Asset Mapping
 
 `map_benchmark_assets.py` assembles benchmark-aligned release records by joining
