@@ -192,6 +192,19 @@ PROMPT_CONV = (
     "Respond with ONLY one letter. Do NOT explain."
 )
 
+# ── Version C: no-context ablation (candidate images ONLY) ──────────────────
+# Used for the context-ablation experiment: no conversation text, no context
+# images, no tone note (tone is context-derived). Deliberately contains no
+# "Conversation:" marker so every runner falls into its no-context branch and
+# skips context-image interleaving.
+PROMPT_NOCTX = (
+    "You are given four candidate meme images labeled A, B, C, and D (shown below).\n\n"
+    "Exactly one of them was actually posted as a meme reply in a real social "
+    "media conversation. The conversation itself is NOT shown to you.\n\n"
+    "Which image (A, B, C, or D) was actually posted as the meme reply?\n"
+    "Respond with ONLY one letter. Do NOT explain."
+)
+
 # ── Version B: discourse-label based (no raw conversation text) ──────────────
 PROMPT_DISC = (
     "You are an expert in internet meme culture and conversational discourse.\n\n"
@@ -269,6 +282,8 @@ def build_prompt(item: MCItem, version: str | None = None) -> str:
     if version == "disc":
         disc_ctx = _build_disc_context(item.discourse)
         return PROMPT_DISC.format(disc_context=disc_ctx)
+    elif version == "noctx":
+        return PROMPT_NOCTX
     else:
         # Extract tone from conversation text (e.g. "[Tone: Sarcastic, Humorous]")
         import re as _re

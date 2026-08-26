@@ -100,7 +100,7 @@ def run(
     for _ in range(max_retries):
         try:
             resp = client.chat.completions.create(
-                model=model,
+                model=DEFAULT_MODEL,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0,

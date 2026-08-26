@@ -62,7 +62,18 @@ def _url_image_block(url: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             raw = r.read()
-        mime = "image/jpeg"
+        # 실제 포맷 감지 후 webp는 jpeg로 변환
+        import imghdr
+        fmt = imghdr.what(None, h=raw)
+        if fmt == "webp":
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            raw = buf.getvalue()
+            fmt = "jpeg"
+        mime = f"image/{fmt}" if fmt else "image/jpeg"
         return {
             "type": "image",
             "source": {"type": "base64", "media_type": mime,

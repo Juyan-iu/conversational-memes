@@ -53,6 +53,22 @@ HYDRATED_FIELDS = (
     "closest_sibling_text_reply",
     "comparison_reply",
 )
+MANIFEST_HYDRATION_FIELDS = {
+    "uid",
+    "uri",
+    "meme_reply_uri",
+    "root_post_uri",
+    "reply_parent_uri",
+    "parent_reply_uri",
+    "quoted_post_uri",
+    "best_reply_before_meme_uri",
+    "closest_text_reply_uri",
+    "closest_sibling_text_reply_uri",
+    "comparison_reply_uri",
+    "thread_depth",
+    "thread_label",
+}
+DEFAULT_CARRY_EXCLUDE_FIELDS = {"ancestor_chain", "discourse_labels"}
 
 
 def utc_now() -> str:
@@ -88,6 +104,13 @@ def ref_uri(ref: Any) -> str | None:
     if isinstance(ref, dict):
         return clean_uri(ref.get("uri"))
     return clean_uri(ref)
+
+
+def nested_post_uri(entry: dict[str, Any], field: str) -> str | None:
+    value = entry.get(field)
+    if isinstance(value, dict):
+        return clean_uri(value.get("uri"))
+    return None
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -522,9 +545,9 @@ def build_record(
     by_uri = {post["uri"]: post for post in parent_posts if post}
     by_uri[meme_reply["uri"]] = meme_reply
 
-    root_uri = clean_uri(entry.get("root_post_uri")) or meme_reply.get("root_uri")
+    root_uri = clean_uri(entry.get("root_post_uri")) or nested_post_uri(entry, "original_post") or meme_reply.get("root_uri")
     reply_parent_uri = clean_uri(entry.get("reply_parent_uri")) or meme_reply.get("parent_uri")
-    parent_reply_uri = clean_uri(entry.get("parent_reply_uri"))
+    parent_reply_uri = clean_uri(entry.get("parent_reply_uri")) or nested_post_uri(entry, "parent_reply")
     if not parent_reply_uri and reply_parent_uri and root_uri and reply_parent_uri != root_uri:
         parent_reply_uri = reply_parent_uri
 
@@ -539,14 +562,14 @@ def build_record(
     quoted_post = None
     if original_post:
         quoted_post = original_post.get("quoted_post")
-    quoted_uri = clean_uri(entry.get("quoted_post_uri"))
+    quoted_uri = clean_uri(entry.get("quoted_post_uri")) or nested_post_uri(entry, "quoted_post")
     if quoted_uri and (not quoted_post or quoted_post.get("uri") != quoted_uri):
         quoted_post = fetch_post_dict(client, quoted_uri) or stub_post(quoted_uri)
 
-    best_reply_uri = clean_uri(entry.get("best_reply_before_meme_uri"))
-    closest_text_uri = clean_uri(entry.get("closest_text_reply_uri"))
-    closest_sibling_uri = clean_uri(entry.get("closest_sibling_text_reply_uri"))
-    comparison_uri = clean_uri(entry.get("comparison_reply_uri"))
+    best_reply_uri = clean_uri(entry.get("best_reply_before_meme_uri")) or nested_post_uri(entry, "best_reply_before_meme")
+    closest_text_uri = clean_uri(entry.get("closest_text_reply_uri")) or nested_post_uri(entry, "closest_text_reply")
+    closest_sibling_uri = clean_uri(entry.get("closest_sibling_text_reply_uri")) or nested_post_uri(entry, "closest_sibling_text_reply")
+    comparison_uri = clean_uri(entry.get("comparison_reply_uri")) or nested_post_uri(entry, "comparison_reply")
 
     best_reply_before_meme = fetch_auxiliary_reply(client, best_reply_uri)
     closest_text_reply = fetch_auxiliary_reply(client, closest_text_uri)
@@ -678,7 +701,29 @@ def download_record_images(
     return ok_total, fail_total
 
 
+def rows_from_json(path: Path) -> list[dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        for key in ("records", "items", "data", "rows"):
+            if isinstance(data.get(key), list):
+                return [row for row in data[key] if isinstance(row, dict)]
+        if all(isinstance(value, dict) for value in data.values()):
+            rows = []
+            for key, value in data.items():
+                row = dict(value)
+                row.setdefault("uid", key)
+                rows.append(row)
+            return rows
+        return [data]
+    raise ValueError(f"{path} is JSON but does not contain object rows")
+
+
 def read_manifest(path: Path) -> list[dict[str, Any]]:
+    if path.suffix.lower() == ".json":
+        return rows_from_json(path)
+
     entries: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
@@ -694,6 +739,30 @@ def read_manifest(path: Path) -> list[dict[str, Any]]:
                 entry = {"uid": line}
             entries.append(entry)
     return entries
+
+
+def carry_release_fields(record: dict[str, Any], entry: dict[str, Any], args: argparse.Namespace) -> list[str]:
+    fields: set[str] = set(args.carry_field or [])
+    excluded = set(args.exclude_carried_field or [])
+    if args.carry_all_extra_fields:
+        fields.update(
+            key for key in entry
+            if key not in MANIFEST_HYDRATION_FIELDS and key not in HYDRATED_FIELDS
+            and key not in excluded
+        )
+
+    carried = []
+    for field in sorted(fields):
+        if field not in entry:
+            continue
+        if field in record and not args.overwrite_carried_fields:
+            continue
+        record[field] = entry[field]
+        carried.append(field)
+
+    if carried:
+        record.setdefault("hydration_metadata", {})["carried_release_fields"] = carried
+    return carried
 
 
 def select_entries(entries: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -738,6 +807,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep", type=float, default=0.1, help="Delay after each API request.")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Validate and preview manifest rows without API calls.")
+    parser.add_argument(
+        "--carry-all-extra-fields",
+        action="store_true",
+        help="Copy non-hydration fields from each manifest/labeled-release row into the hydrated record.",
+    )
+    parser.add_argument(
+        "--carry-field",
+        action="append",
+        default=[],
+        help="Copy this field from each manifest/labeled-release row into the hydrated record. Can repeat.",
+    )
+    parser.add_argument(
+        "--exclude-carried-field",
+        action="append",
+        default=sorted(DEFAULT_CARRY_EXCLUDE_FIELDS),
+        help="Exclude this field from --carry-all-extra-fields. Can repeat. Defaults exclude discourse_labels and ancestor_chain.",
+    )
+    parser.add_argument(
+        "--overwrite-carried-fields",
+        action="store_true",
+        help="Allow carried fields to overwrite fields produced by hydration.",
+    )
     return parser.parse_args()
 
 
@@ -798,6 +889,7 @@ def main() -> int:
                 client,
                 parent_height=args.parent_height,
             )
+            carry_release_fields(record, entry, args)
             ok_images, failed_images = download_record_images(
                 record,
                 mode=args.download_images,

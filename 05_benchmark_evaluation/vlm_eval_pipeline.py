@@ -30,6 +30,7 @@ Available models:
 from __future__ import annotations
 
 import argparse
+import os as _os
 import importlib
 import json
 import shutil
@@ -192,7 +193,7 @@ def build_info_txt(meta: dict) -> tuple[str, list[str]]:
         parts.append(f'"{meme_text}"')
     else:
         parts.append("(no text caption)")
-    if stance_tags:
+    if stance_tags and _os.environ.get("PROMPT_VERSION", "conv") != "notone":
         parts.append(f"[Tone: {', '.join(stance_tags)}]")
     parts.append("→ A meme image was posted here. Select which one.")
 
@@ -576,22 +577,28 @@ def main() -> int:
                     help="Custom output folder name. Default: <timestamp>_<model>")
     ap.add_argument("--seed", type=int, default=0,
                     help="Shuffle seed for A/B/C/D assignment. Default: 0")
+    ap.add_argument("--sample", type=int, default=None,
+                    help="Randomly sample N items with fixed seed 42 (same subset "
+                         "every run/model). Saves the sampled ids to a txt file so "
+                         "the conv-condition results can be paired on the same items. "
+                         "Use for the context-ablation run.")
     ap.add_argument("--circular", action="store_true",
                     help="Circular evaluation: run each item 4x with answer at each position "
                          "(A/B/C/D), average score. Eliminates position bias. "
                          "Recommended for local models only (4x compute).")
     ap.add_argument("--report", action="store_true",
                     help="Auto-generate paper tables + plots after all models finish")
-    ap.add_argument("--prompt-version", default="conv", choices=["conv", "disc"],
+    ap.add_argument("--prompt-version", default="conv", choices=["conv", "disc", "noctx", "notone"],
                     help="Prompt version: 'conv' (full conversation text, default) | "
-                         "'disc' (discourse-label based, no raw text)")
+                         "'disc' (discourse-label based, no raw text) | "
+                         "'noctx' (context-ablation: candidate images only)")
     args = ap.parse_args()
 
     models = _resolve_models(args.model)
 
     # Step 1: Convert
     if args.skip_convert:
-        eval_data_dir = CONVERTED_DATA_DIR
+        eval_data_dir = Path(args.data_root) if args.data_root else CONVERTED_DATA_DIR
         print(f"[CONVERT] Skipping — using {eval_data_dir}")
     elif args.data_root:
         src = Path(args.data_root)
@@ -620,6 +627,14 @@ def main() -> int:
         uid_set = set(open(args.uid_list).read().splitlines())
         items = [it for it in items if it.id in uid_set]
         print(f"[UID-LIST] {len(items)} items filtered")
+    if args.sample is not None:
+        import random as _random
+        _rng = _random.Random(42)  # fixed seed: same subset across models/runs
+        items = sorted(items, key=lambda it: it.id)  # order-independent sampling
+        items = _rng.sample(items, min(args.sample, len(items)))
+        sample_ids_path = HERE / f"ablation_sample_{args.sample}_seed42.txt"
+        sample_ids_path.write_text("\n".join(it.id for it in items))
+        print(f"[SAMPLE] {len(items)} items (seed=42) — ids saved to {sample_ids_path}")
     if args.num is not None:
         items = items[:args.num]
     if not items:
